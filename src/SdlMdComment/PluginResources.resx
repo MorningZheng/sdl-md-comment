@@ -15,13 +15,16 @@
   <data name="Plugin_Name" xml:space="preserve">
     <value>sdl-md-comment</value>
   </data>
-  <data name="MdCommentViewPart_Name" xml:space="preserve">
+  <data name="MdCommentRibbonGroup_Name" xml:space="preserve">
     <value>MD 备注</value>
   </data>
-  <data name="MdCommentViewPart_Description" xml:space="preserve">
-    <value>以 Markdown / HTML 渲染当前句段的备注</value>
+  <data name="MdCommentAction_Name" xml:space="preserve">
+    <value>悬浮备注</value>
   </data>
-  <data name="MdCommentViewPart_Icon" type="System.Resources.ResXFileRef, System.Windows.Forms">
+  <data name="MdCommentAction_Description" xml:space="preserve">
+    <value>打开独立的悬浮窗口，以 Markdown / HTML 渲染当前句段的备注</value>
+  </data>
+  <data name="MdCommentIcon" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>icon.ico;System.Drawing.Icon, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
 </root>

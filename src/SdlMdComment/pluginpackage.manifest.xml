@@ -1,8 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PluginPackage xmlns="http://www.sdl.com/Plugins/PluginPackage/1.0">
   <PlugInName>sdl-md-comment</PlugInName>
-  <Version>0.1.0.0</Version>
+  <Version>0.4.0.0</Version>
   <Description>以 Markdown / HTML 渲染当前句段的备注</Description>
   <Author>zheng</Author>
   <RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="16.9" />
+  <Include>
+    <!-- WebView2 托管层 -->
+    <File>Microsoft.Web.WebView2.Core.dll</File>
+    <File>Microsoft.Web.WebView2.WinForms.dll</File>
+    <File>Microsoft.Web.WebView2.Wpf.dll</File>
+
+    <!-- 原生 loader：16/17/18 是 32 位宿主，只放 x86 这一份 -->
+    <File>runtimes\win-x86\native\WebView2Loader.dll</File>
+
+    <!-- 渲染层产物，文件名固定（vite 里关掉了内容 hash） -->
+    <File>ui\dist\index.html</File>
+    <File>ui\dist\app.js</File>
+    <File>ui\dist\app.css</File>
+  </Include>
 </PluginPackage>

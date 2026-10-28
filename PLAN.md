@@ -7,14 +7,17 @@
 
 | 需求 | 实现方式 |
 |---|---|
-| 启动预览后出现窗口 | 面板 = Studio ViewPart（挂 Editor 视图，Dock 底部）；功能区按钮「MD 备注」打开/激活面板 |
-| 可以拖放（拖动/浮动） | ViewPart 原生继承 Studio 停靠系统：可拖出成浮动窗口、可吸附、可 Tab 合并，零代码 |
-| 窗口随意调整大小 | 停靠系统原生支持（拖边框/浮动窗缩放） |
-| 支持关闭 | 面板 X 关闭；按钮可重新打开 |
+| 启动预览后出现窗口 | **独立悬浮窗口**（WPF `Window`，owner = Studio 主窗口）+「附加功能」页签里的「悬浮备注」按钮。不进 Studio 的停靠系统 |
+| 可以拖放（拖动/浮动） | 就是普通顶层窗口：随便拖、随便摆；owner 是 Studio，所以跟着 Studio 最小化、不会被 Studio 盖住 |
+| 窗口随意调整大小 | 标准可缩放窗口；位置和尺寸存在 `%LocalAppData%\sdl-md-comment\window.json`，下次照旧打开 |
+| 支持关闭 | 窗口 X 关闭即释放（事件退订 + WebView2 Dispose）；按钮重开，记忆的位置尺寸不变 |
 | 点击 Trados 条目自动切换内容 | `EditorController.ActiveDocumentChanged` + `Document.ActiveSegmentChanged` → 推送当前句段备注到前端 |
 | HTML / Markdown 渲染 | WebView2 + markdown-it（md→HTML）+ github-markdown-css（好看）+ highlight.js（代码高亮）+ DOMPurify（净化 HTML 直通） |
 
-> 备选：若后续想要"真正悬浮置顶"的独立窗口（不参与停靠），再加一个 WPF owned Window 版本，事件/渲染层完全复用。M0~M3 不做。
+> **决策记录（2026-10-28）**：最初按 ViewPart 做成 Studio 底部停靠面板并已验收通过，但需求方明确要「不要嵌入 Trados，要漂浮出来」，于是改为独立悬浮窗口。
+> 事件层（`StudioEvents`）、数据层（`CommentReader`）、渲染层（`MdCommentPanel` + WebView2 + `ui/`）**一行没改**，只把挂载方式从 `[ViewPart]` 换成 `[Action]` + `[RibbonGroup]`，这正是当初留备选路径的价值。
+
+> 原来的备选路径（ViewPart 停靠面板）已实现并验收通过，现作为「若想回到嵌入模式」的现成退路保留在提交历史里（`dde8d50`..`c092e8d`）。M0~M3 不再涉及停靠。
 
 ## 二、技术栈（已定）
 
@@ -130,9 +133,12 @@ C# 宿主：
 - 初始化仍放 `Loaded` 之后异步做；`Dispose` 先摘 `WebMessageReceived` 再 `Dispose()`。
 - 起不来时（例如目标机器没装运行时）面板显示错误文案 + 指向 trace.log，不留空白。
 
-部署：
-- WebView2 运行时与 `ui/dist` 目前**不进 `.sdlplugin`**（M4 再补 `Include`），`build.ps1 -Deploy` 从 `bin\Release` 额外铺 `Microsoft.Web.WebView2.*.dll` 与 `runtimes\`。
-- `ui\dist` 用**目录联接**指回仓库：`npm run watch` 写完直接 F5 就生效，不用重编插件、不用重新部署。
+部署与打包：
+- `.sdlplugin` 现在**自带全部运行时**：`pluginpackage.manifest.xml` 的 `<Include>` 里列了 WebView2 三个托管 DLL、原生 loader、以及 `ui\dist` 三件套；`StageUiDist` 目标先把前端产物铺进输出目录，让 `Include` 都是相对输出目录的固定路径。
+- **打包工具会压平嵌套目录**：`ui\dist\index.html` 进包后变成 `ui/index.html`，`runtimes\win-x86\native\WebView2Loader.dll` 变成 `runtimes/WebView2Loader.dll`。这两处都会打断运行时查找，因此：
+  - loader：`CoreWebView2Environment.SetLoaderDllFolderPath()` 显式指定目录（按 `runtimes\win-<arch>\native` → `runtimes` → 插件根 依次探测），必须在第一次碰 WebView2 之前调用；
+  - 前端：`FindDist()` 先找 `ui\dist`（开发态联接），再退到 `ui`（打包后的平铺布局）。
+- `build.ps1 -Deploy` 直接解包 `.sdlplugin` 铺到 `Unpacked\SdlMdComment`，保证加载的就是刚打出来的包；开发态再额外把 `ui\dist` 建成指回仓库的**目录联接**，`npm run watch` 写完 F5 即生效。
 
 实测（Studio 16.2.10）：
 - trace：`panel.ctor → webview userDataFolder → webview dist → bridge <- ready`，随后 `ActiveDocumentChanged`。
@@ -144,7 +150,25 @@ C# 宿主：
 - 本机没有全局 Node，用的是 `D:\Object\board\node-v24.21.0-win-x64`（v24.21.0 / npm 11.19.0），命令前把它加进 PATH。
 - esbuild 默认往 `%TEMP%` 写临时文件，在这台机器上删除时可能报 `Access is denied` 导致 `vite build` 失败。把 `TMP`/`TEMP` 指到工作区内（例如 `.scratch\tmp`）即可稳定复现通过。
 
-### M3 桥与写回（可选，约 0.5–1 天）
+### M2.5 改为独立悬浮窗口（已完成）
+
+需求方明确「不要嵌入 Trados，要漂浮出来」，于是把 ViewPart 换成独立窗口。
+
+- `[Action("SdlMdComment.OpenWindow")]` + `[ActionLayout(typeof(MdCommentRibbonGroup), 0, DisplayType.Large)]` → ribbon 按钮。
+- `[RibbonGroup("SdlMdComment.RibbonGroup")]` + `[RibbonGroupLayout(typeof(StudioDefaultRibbonTabs.AddinsRibbonTabLocation))]` → 自带一个功能区组，落在「附加功能」页签。
+  **坑**：只写 `[ActionLayout(typeof(EditorController), 10, DisplayType.Large)]` 是**不会出现按钮**的——第三方插件必须自带 `AbstractRibbonGroup`，并把 action 挂到自己的组上。
+- `MdCommentWindow`：普通 WPF `Window`，owner 用 `Process.GetCurrentProcess().MainWindowHandle`（Studio 多文档时拿 `ActiveWindow` 会跟着文档窗口跑）；位置尺寸存 `%LocalAppData%\sdl-md-comment\window.json`，恢复时夹回虚拟屏幕内。
+- 开窗才 hook 事件、关窗就 `Dispose`（`StudioEvents` + `MdCommentPanel`），不留悬挂订阅。
+
+实测：点「悬浮备注」→ trace `panel.ctor → window.ctor → StudioEvents.Hook: ok → webview loader → userDataFolder → dist → bridge <- ready`；窗口显示句段 1 的备注；再打开一份 Markdown 备注的文档，窗口内容随之切成标题 + 加粗 + 列表。
+
+### M3 写回（已取消）
+
+需求方确认为**只读**：不需要在面板里编辑或新增备注。因此不做 `addComment` / `updateComment`，面板不提供编辑框。
+
+只读定位下仍然有效的那部分简单留着：前端收到 `<!--html-->` 会按 HTML 渲染、其余按 Markdown，但**永远不写回**——原生备注里的纯文本不动。
+
+### （原）M3 桥与写回
 - BridgeDispatcher：`getComments` 拉取 + 事件推送统一走 JSON-RPC（id 关联 Promise、错误透传）
 - 面板内 Markdown 编辑框 → `AddCommentOnSegment` 写回（原生备注里存 Markdown 源码，Studio 原生窗口可见纯文本）
 - **验收**：面板新增备注 → Studio 原生备注窗口可见同一文本；保存 sdlxliff 后重开不丢

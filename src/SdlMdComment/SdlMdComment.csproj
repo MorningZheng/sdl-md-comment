@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SdlMdComment</AssemblyName>
     <RootNamespace>SdlMdComment</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
@@ -80,6 +80,16 @@
        直接删会去动 Studio 安装目录里的 DLL。 -->
   <Target Name="UnstageStudioRefs" AfterTargets="GeneratePluginManifestTarget">
     <Delete Files="@(_StudioRefForManifest->'$(TargetDir)%(Filename)%(Extension)')" ContinueOnError="true" />
+  </Target>
+
+  <!-- 前端产物先铺进输出目录，包清单里的 Include 就都是相对输出目录的固定路径 -->
+  <Target Name="StageUiDist" BeforeTargets="GeneratePluginManifestTarget">
+    <ItemGroup>
+      <_UiDistFile Include="$(MSBuildProjectDirectory)\..\..\ui\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_UiDistFile)"
+          DestinationFiles="@(_UiDistFile->'$(TargetDir)ui\dist\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

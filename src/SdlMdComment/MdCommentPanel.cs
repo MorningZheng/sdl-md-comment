@@ -86,6 +86,9 @@ namespace SdlMdComment
 
         private async System.Threading.Tasks.Task InitializeWebViewAsync()
         {
+            // 必须在第一次碰 WebView2 之前指定原生 loader 的位置
+            EnsureNativeLoader();
+
             var userDataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "sdl-md-comment",
@@ -131,18 +134,64 @@ namespace SdlMdComment
             _webView.Visibility = Visibility.Visible;
         }
 
+        /// <summary>
+        /// .sdlplugin 打包工具会把嵌套目录压平（`runtimes\win-x86\native\x.dll` → `runtimes\x.dll`），
+        /// 而 WebView2 默认只按 `runtimes\win-<arch>\native` 找 loader，所以这里自己探一遍并显式指定。
+        /// </summary>
+        private static void EnsureNativeLoader()
+        {
+            var assemblyDir = Path.GetDirectoryName(typeof(MdCommentPanel).Assembly.Location);
+            if (string.IsNullOrEmpty(assemblyDir))
+            {
+                return;
+            }
+
+            var arch = Environment.Is64BitProcess ? "win-x64" : "win-x86";
+            var candidates = new[]
+            {
+                Path.Combine(assemblyDir, "runtimes", arch, "native"),
+                Path.Combine(assemblyDir, "runtimes"),
+                assemblyDir,
+            };
+
+            foreach (var dir in candidates)
+            {
+                if (File.Exists(Path.Combine(dir, "WebView2Loader.dll")))
+                {
+                    CoreWebView2Environment.SetLoaderDllFolderPath(dir);
+                    Trace.Write("webview loader: " + dir);
+                    return;
+                }
+            }
+
+            Trace.Write("webview loader: 没找到 WebView2Loader.dll，退回默认查找");
+        }
+
         private static string FindDist()
         {
-            // 插件目录下的 ui\dist。开发时这里是 build.ps1 建出来的目录联接，
-            // 指向仓库的 ui\dist，vite build --watch 写完直接 F5 就生效，不用重编插件。
             var assemblyDir = Path.GetDirectoryName(typeof(MdCommentPanel).Assembly.Location);
             if (string.IsNullOrEmpty(assemblyDir))
             {
                 return null;
             }
 
-            var dist = Path.Combine(assemblyDir, "ui", "dist");
-            return File.Exists(Path.Combine(dist, "index.html")) ? dist : null;
+            // ui\dist 是开发态（目录联接指回仓库，npm run watch 写完 F5 即生效）；
+            // ui 是打包后的平铺布局。
+            var candidates = new[]
+            {
+                Path.Combine(assemblyDir, "ui", "dist"),
+                Path.Combine(assemblyDir, "ui"),
+            };
+
+            foreach (var dir in candidates)
+            {
+                if (File.Exists(Path.Combine(dir, "index.html")))
+                {
+                    return dir;
+                }
+            }
+
+            return null;
         }
 
         private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
