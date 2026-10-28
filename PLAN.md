@@ -86,8 +86,27 @@ sdl-md-comment/
 
 ### M1 句段跟随（约 0.5 天）
 - 订阅 `ActiveDocumentChanged` / `ActiveSegmentChanged`，读 `ActiveSegmentPair` + `GetCommentsFromSegment`
-- 面板显示：句段号 + 备注 JSON（临时纯文本），空备注显示占位
+- 面板显示：句段号 + 备注（临时纯文本），空备注显示占位
 - **验收**：在编辑器里点击/移动句段，面板 200ms 内跟随刷新；切换文档不崩、事件正确重挂
+
+#### M1 实施记录（已通过）
+
+结构：
+- `StudioEvents`：`EditorController.ActiveDocumentChanged` / `Closed` 管文档级，`IStudioDocument.ActiveSegmentChanged` 管句段级。切文档一律先 `DetachDocument()`（退旧文档的 `ActiveSegmentChanged`）再挂新的，否则事件会漏在死对象上。所有回调包 try/catch——Studio 的事件处理器里抛异常会直接影响宿主。
+- 线程：构造在 `Initialize`（UI 线程），拿 `Dispatcher.CurrentDispatcher` 兜底；读备注与刷面板都走 `Dispatcher`，不在事件线程上直接碰 Studio API。
+- `CommentReader`：`IStudioDocument.ActiveSegmentPair` → `Properties.Id.Id` 取句段号（`SegmentId` 是**结构体**，不能接 `?.`），`GetCommentsFromSegment(pair)` 转 `CommentDto{Index,Text,Author,Date,Severity,Version}`，严重级别只往前端漏小写字符串。
+- 面板：句段号 + 备注条数；每条按严重级别画左色条（高红 / 中橙 / 低黄 / 未定级灰）+ 正文 + `级别 · 作者 · 时间`；无备注时显示占位文案。
+
+实测（Studio 16.2.10，3330 句段的真实文件）：
+- `controller.ctor → Initialize → StudioEvents.Hook: ok → GetContentControl`，随后 `event: ActiveDocumentChanged`。
+- 句段 1 → 5 点击切换，面板从「句段 1」刷成「句段 5」，备注正常显示（`新增机翻` / 高 / 未知作者 / 2026-10-24 16:36）。
+- 这份文件 3331 条 `cmt-def`、3330 个 `x-sdl-comment` marker，**几乎每个句段都挂着同一条备注**，所以句段 1 和 5 内容相同是数据本身，不是读错。
+
+顺带修正调研里的一处存储格式描述：实测 `doc-info` 用的是默认命名空间，元素是
+`<cmt-def id="..."><Comments><Comment severity="High" user="" date="..." version="1.0">文本</Comment></Comments></cmt-def>`，
+不是 `<sdl:cmt-def><sdl:Comment>`。正文锚定仍是 `<mrk mtype="x-sdl-comment" sdl:cid="{id}">`。
+
+未实测项：关闭文档后的重挂（自动化下 `Ctrl+W` 没能让 Studio 关文档），代码路径是「`DetachDocument` 先退订再挂新的」，与已通过的启动/切换路径同一条；留待人工点一下关闭文档确认。
 
 ### M2 WebView2 + Markdown 渲染（约 1 天）
 - **第一步先解决 UserDataFolder**：默认值会落在宿主 exe 旁（`Program Files (x86)\...\Studio16\`，不可写）→ `EnsureCoreWebView2Async` 直接抛异常。必须 `CoreWebView2Environment.CreateAsync(userDataFolder: %LocalAppData%\sdl-md-comment\webview2)`，之后所有初始化都基于这个 environment

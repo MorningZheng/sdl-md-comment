@@ -23,21 +23,39 @@ namespace SdlMdComment
         // 而 WPF 控件在非 STA 线程上 new 会抛，异常又被 Studio 吞掉，表现是面板根本不出现。
         private readonly Lazy<MdCommentPanel> _panel = new Lazy<MdCommentPanel>(() => new MdCommentPanel());
 
+        private StudioEvents _events;
+
         public MdCommentViewPartController()
         {
             Trace.Write("controller.ctor");
         }
 
-        // 面板被 Studio 纳入布局时回调。M1 的 ActiveSegmentChanged 订阅挂这里，Dispose 里退订。
+        // 面板被 Studio 纳入布局时回调，句段跟随就是在这里挂上的
         protected override void Initialize()
         {
             Trace.Write("controller.Initialize");
+            _events = new StudioEvents(snapshot => _panel.Value.Show(snapshot));
+            _events.Hook();
         }
 
         protected override IUIControl GetContentControl()
         {
             Trace.Write("controller.GetContentControl");
             return _panel.Value;
+        }
+
+        public override void Dispose()
+        {
+            Trace.Write("controller.Dispose");
+
+            // 面板关掉就把事件退干净，重开时 Initialize 会重新挂
+            if (_events != null)
+            {
+                _events.Dispose();
+                _events = null;
+            }
+
+            base.Dispose();
         }
     }
 }
