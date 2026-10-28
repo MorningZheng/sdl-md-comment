@@ -295,6 +295,14 @@ C# 宿主：
 
 已知代价（需知悉）：`Topmost` 会盖住包括 Studio 自己弹出的对话框在内的所有窗口。若哪天觉得碍事，可以退回"仅 Studio 在前台时置顶"，但那需要监听 Studio 的激活事件，比现在复杂。
 
+### 窗口标题跟随文档（0.6.1）
+
+标题 = 当前活动文件名（即编辑器里那个标签的名字，取自 `IStudioDocument.ActiveFile.Name`，类型是 `Sdl.ProjectAutomation.Core.ProjectFile`），没有文档时回落到「悬浮批注」。
+
+实测：开着 `(初译-pv-pfizer)…-导新翻.sdlxliff` 时标题就是它；打开 `md-test2.sdlxliff` → 标题变 `md-test2.sdlxliff`；切回第一个页签 → 标题变回去。
+
+实现注意：文档名要在**判断句段之前**取，否则刚打开文档、还没落到句段时标题不会更新；`ActiveFile` 在文档关闭过程中可能抛，取值包了 try/catch。
+
 ### 一个测试本身的坑
 
 抓悬浮窗口时坐标一直对不上：`GetWindowRect` 在非 DPI 感知进程里返回的是**虚拟化后的逻辑坐标**，而 `CopyFromScreen` 按物理像素取图，两者差 1.5 倍。脚本里先调 `SetProcessDPIAware()` 才对齐。另外 `PrintWindow` 抓 WebView2 会拿到**过期的 GPU 层**（内容按旧宽度排版、右侧被切），判断布局是否正确要看子窗口实际尺寸（`Chrome_WidgetWin_0` 605×423 == 客户区 605×422 即为对齐）或直接屏幕截图。

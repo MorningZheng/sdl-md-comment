@@ -23,9 +23,12 @@ namespace SdlMdComment
         public string Version { get; set; }
     }
 
-    /// <summary>一次句段快照：当前句段号 + 它的备注。M2 会往里加 source / target。</summary>
+    /// <summary>一次句段快照：当前文档名 + 当前句段号 + 它的备注。M2 会往里加 source / target。</summary>
     internal sealed class SegmentSnapshot
     {
+        /// <summary>当前活动文件的名字，用来做窗口标题。</summary>
+        public string DocumentName { get; set; }
+
         public string SegmentId { get; set; }
 
         public List<CommentDto> Comments { get; } = new List<CommentDto>();
@@ -40,6 +43,9 @@ namespace SdlMdComment
             {
                 return snapshot;
             }
+
+            // 文档名要在句段判断之前取：刚打开文档、还没落到句段时也要能更新标题
+            snapshot.DocumentName = ReadDocumentName(document);
 
             // 文档刚打开、或编辑器里还没落到任何句段时这里是 null，不算异常
             var pair = document.ActiveSegmentPair;
@@ -72,6 +78,23 @@ namespace SdlMdComment
             }
 
             return snapshot;
+        }
+
+        /// <summary>
+        /// 当前活动文件的名字，用来做窗口标题。取不到就当没有——标题回落到产品名。
+        /// 文档关闭过程中 ActiveFile 可能抛，别让它冒到事件处理器里。
+        /// </summary>
+        private static string ReadDocumentName(IStudioDocument document)
+        {
+            try
+            {
+                return document.ActiveFile?.Name;
+            }
+            catch (Exception ex)
+            {
+                Trace.Write("ReadDocumentName failed: " + ex.Message);
+                return null;
+            }
         }
 
         private static string MapSeverity(Severity severity)

@@ -22,6 +22,7 @@ namespace SdlMdComment
                 ["method"] = "segmentChanged",
                 ["params"] = new Dictionary<string, object>
                 {
+                    ["documentName"] = snapshot.DocumentName,
                     ["segmentId"] = snapshot.SegmentId,
                     ["comments"] = snapshot.Comments.Select(ToPayload).ToArray(),
                 },

@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SdlMdComment</AssemblyName>
     <RootNamespace>SdlMdComment</RootNamespace>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
@@ -56,6 +56,10 @@
       <HintPath>$(StudioRoot)\Sdl.FileTypeSupport.Framework.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Sdl.ProjectAutomation.Core">
+      <HintPath>$(StudioRoot)\Sdl.ProjectAutomation.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Sdl.TranslationStudioAutomation.IntegrationApi">
       <HintPath>$(StudioRoot)\Sdl.TranslationStudioAutomation.IntegrationApi.dll</HintPath>
       <Private>false</Private>
@@ -70,6 +74,7 @@
       <_StudioRefForManifest Include="$(StudioRoot)\Sdl.Desktop.IntegrationApi.dll" />
       <_StudioRefForManifest Include="$(StudioRoot)\Sdl.Desktop.IntegrationApi.Extensions.dll" />
       <_StudioRefForManifest Include="$(StudioRoot)\Sdl.FileTypeSupport.Framework.Core.dll" />
+      <_StudioRefForManifest Include="$(StudioRoot)\Sdl.ProjectAutomation.Core.dll" />
       <_StudioRefForManifest Include="$(StudioRoot)\Sdl.TranslationStudioAutomation.IntegrationApi.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(_StudioRefForManifest)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />

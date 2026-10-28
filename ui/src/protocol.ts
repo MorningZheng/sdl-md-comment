@@ -14,6 +14,8 @@ export interface CommentDto {
 }
 
 export interface SegmentSnapshot {
+  /** 当前活动文件名，窗口标题用它 */
+  documentName?: string | null
   /** null = 没有打开的文档，或光标还没落进任何句段 */
   segmentId: string | null
   comments: CommentDto[]

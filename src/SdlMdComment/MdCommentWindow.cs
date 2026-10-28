@@ -49,6 +49,10 @@ namespace SdlMdComment
         /// <summary>由宿主的窗口线程调用。</summary>
         public void ShowSnapshot(SegmentSnapshot snapshot)
         {
+            // 标题跟随当前文档（即编辑器里那个标签的名字）；没有文档时回落到产品名
+            var name = snapshot == null ? null : snapshot.DocumentName;
+            Title = string.IsNullOrWhiteSpace(name) ? "悬浮批注" : name;
+
             _panel.Show(snapshot);
         }
 
