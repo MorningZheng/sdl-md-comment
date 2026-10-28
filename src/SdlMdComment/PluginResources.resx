@@ -13,13 +13,13 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="Plugin_Name" xml:space="preserve">
-    <value>sdl-md-comment</value>
+    <value>悬浮批注</value>
   </data>
   <data name="MdCommentRibbonGroup_Name" xml:space="preserve">
-    <value>MD 备注</value>
+    <value>悬浮批注</value>
   </data>
   <data name="MdCommentAction_Name" xml:space="preserve">
-    <value>悬浮备注</value>
+    <value>悬浮批注</value>
   </data>
   <data name="MdCommentAction_Description" xml:space="preserve">
     <value>打开独立的悬浮窗口，以 Markdown / HTML 渲染当前句段的备注</value>

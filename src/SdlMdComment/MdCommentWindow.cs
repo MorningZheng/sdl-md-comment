@@ -24,7 +24,7 @@ namespace SdlMdComment
 
             _panel = panel;
 
-            Title = "MD 备注";
+            Title = "悬浮批注";
             Width = 620;
             Height = 460;
             MinWidth = 320;

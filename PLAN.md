@@ -1,5 +1,8 @@
 # sdl-md-comment 开发计划
 
+> **产品名：悬浮批注**（2026-10-29 定名）。功能区「附加功能」页签下的按钮、悬浮窗口标题、插件管理器显示名统一为「悬浮批注」。
+> 代码内部标识保持 `SdlMdComment` / `sdl-md-comment`（程序集名、插件 id、包名、部署目录），改名只动面向用户的字符串——改标识要连强名称和 plugin.xml 一起动，收益为零、风险不小。
+
 > Trados Studio 备注（Comments）Markdown/HTML 预览插件。基于 2026-10 调研结论（见 `D:\Object\Node\LM.Gateway\trados-comments-plugin-research.md`）。
 > 开发主环境：Trados Studio 2021 (16.2.10, net48)，目标兼容 16 → 19（2021/2022/2024/2026）。
 
