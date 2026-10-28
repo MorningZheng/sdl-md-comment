@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PluginPackage xmlns="http://www.sdl.com/Plugins/PluginPackage/1.0">
   <PlugInName>悬浮批注</PlugInName>
-  <Version>0.7.0.0</Version>
+  <Version>0.7.2.0</Version>
   <Description>以 Markdown / HTML 渲染当前句段备注的悬浮窗口（只读）</Description>
   <Author>zheng</Author>
   <!-- 16=2021 17=2022 18=2024 19=2026：一个包覆盖 2021 起的全部版本 -->

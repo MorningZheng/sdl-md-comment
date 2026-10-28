@@ -240,6 +240,23 @@ ui\index.html, app.js, app.css  渲染层
 
 **卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
 
+**卸载必须清干净（踩过）**：同一插件残留两份（例如 `Packages` 里两个不同文件名的包 → `Unpacked` 下两个目录）时，两份 plugin.xml 里有相同的 action id，Studio 启动阶段注册功能区就炸：
+
+```
+FATAL 无法启动服务 'Sdl.Desktop.Platform.CommandBars.IActionService'
+System.ArgumentException: 已添加了具有相同键的项
+```
+
+表现是 Studio 只弹一个「错误」对话框、主窗口根本不出现。删掉重复的那一份即可恢复。
+
+### 图标（0.7.2）
+
+源图 `C:\Users\zheng\Pictures\玉米饼.png`（1600×1600，32bpp ARGB）。生成多尺寸 ICO：16/24/32/48/64 用 32bpp DIB 帧（兼容性最好），256 用 PNG 帧（体积小）。resx 里仍走 `System.Resources.ResXFileRef` → 打包后的 `.plugin.resources` 里是 `System.Drawing.Icon`。
+
+写 ICO 时踩的坑：DIB 帧的 `BITMAPINFOHEADER.biSize` 必须是 40，留 0 的话三种 `new Icon(...)` 全部抛「The operation completed successfully」——错误信息完全不指向真正原因。
+
+生成脚本：`.scratch\make-icon.ps1 -Source <png>`（接受任意正方形/非正方形 PNG，按等比缩放）。
+
 ## 五、关键约定
 
 - 协议事件：`segmentChanged {segmentId, source, target, comments[]}` / `documentChanged {fileName}`；请求：`getComments(segmentId)`、`addComment(text, severity)`
