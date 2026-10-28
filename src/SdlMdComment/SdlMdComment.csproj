@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Trados Studio 插件壳。net48 + 强命名是宿主的硬要求，不能改。
+       Studio 大版本只影响引用程序集路径与 manifest 版本区间，逻辑代码跨版本不变。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>SdlMdComment</AssemblyName>
+    <RootNamespace>SdlMdComment</RootNamespace>
+    <Version>0.1.0</Version>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Studio 自己有这些 Sdl.* 程序集，插件里绝不能复制一份进来 -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <StudioVersion Condition="'$(StudioVersion)' == ''">16</StudioVersion>
+    <StudioRoot Condition="'$(StudioRoot)' == ''">C:\Program Files (x86)\SDL\SDL Trados Studio\Studio$(StudioVersion)</StudioRoot>
+  </PropertyGroup>
+
+  <!-- 这两项由 Sdl.Core.PluginFramework.Build 的 targets 读取：
+       CreatePluginPackage 生成 .sdlplugin(OPC)，DeployPluginPackage 直接铺进 Studio 插件目录 -->
+  <PropertyGroup>
+    <CreatePluginPackage>true</CreatePluginPackage>
+    <DeployPluginPackage>false</DeployPluginPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Sdl.Core.PluginFramework.Build" Version="16.1.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- 编译期引用本机 Studio 安装目录；Private=false 防止被拷进 bin 与宿主重复 -->
+  <ItemGroup>
+    <Reference Include="Sdl.Core.PluginFramework">
+      <HintPath>$(StudioRoot)\Sdl.Core.PluginFramework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Sdl.Desktop.IntegrationApi">
+      <HintPath>$(StudioRoot)\Sdl.Desktop.IntegrationApi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Sdl.Desktop.IntegrationApi.Extensions">
+      <HintPath>$(StudioRoot)\Sdl.Desktop.IntegrationApi.Extensions.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Sdl.TranslationStudioAutomation.IntegrationApi">
+      <HintPath>$(StudioRoot)\Sdl.TranslationStudioAutomation.IntegrationApi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <!-- CreatePluginManifestTask 会反射加载本插件程序集来读 [ViewPart] 特性，因此
+       Sdl.* 引用必须能解析到。这些 DLL 走 Private=false 不进 ReferenceCopyLocalPaths
+       （否则会被当成要打包的第三方依赖），只在生成清单前临时拷进输出目录供反射使用。 -->
+  <Target Name="StageStudioRefsForManifest" BeforeTargets="GeneratePluginManifestTarget">
+    <ItemGroup>
+      <_StudioRefForManifest Include="$(StudioRoot)\Sdl.Core.PluginFramework.dll" />
+      <_StudioRefForManifest Include="$(StudioRoot)\Sdl.Desktop.IntegrationApi.dll" />
+      <_StudioRefForManifest Include="$(StudioRoot)\Sdl.Desktop.IntegrationApi.Extensions.dll" />
+      <_StudioRefForManifest Include="$(StudioRoot)\Sdl.TranslationStudioAutomation.IntegrationApi.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_StudioRefForManifest)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- 用完就删，bin 里只留插件自己的东西（那几个 DLL 是宿主的，绝不能跟着插件走）。
+       注意必须按输出目录拼路径：@(_StudioRefForManifest) 本身指向 HintPath 的源文件，
+       直接删会去动 Studio 安装目录里的 DLL。 -->
+  <Target Name="UnstageStudioRefs" AfterTargets="GeneratePluginManifestTarget">
+    <Delete Files="@(_StudioRefForManifest->'$(TargetDir)%(Filename)%(Extension)')" ContinueOnError="true" />
+  </Target>
+
+</Project>
