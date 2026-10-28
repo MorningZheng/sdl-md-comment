@@ -1,4 +1,6 @@
-import 'github-markdown-css/github-markdown.css'
+// 用 light 专用版：默认那份会跟随系统深色模式切变量，而面板是固定的浅色卡片，
+// 深色变量会让表格/引用块出现深底浅字的错配
+import 'github-markdown-css/github-markdown-light.css'
 import 'highlight.js/styles/github.css'
 import './style.css'
 

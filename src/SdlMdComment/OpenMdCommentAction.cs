@@ -3,10 +3,10 @@ namespace SdlMdComment
     using System;
     using Sdl.Desktop.IntegrationApi;
     using Sdl.Desktop.IntegrationApi.Extensions;
-    
+
     /// <summary>
-    /// 功能区按钮：开/切到悬浮窗口。挂到 Editor 视图的 ribbon 上，
-    /// 翻译时点一下就出来，不占 Studio 的停靠位。
+    /// 功能区按钮：开/切到悬浮窗口。窗口跑在独立 STA 线程上（见 MdCommentWindowHost），
+    /// 所以 Studio 忙或退出时不会把窗口一起拖死。
     /// </summary>
     [Action(
         "SdlMdComment.OpenWindow",
@@ -16,33 +16,35 @@ namespace SdlMdComment
     [ActionLayout(typeof(MdCommentRibbonGroup), 0, DisplayType.Large)]
     public class OpenMdCommentAction : AbstractAction
     {
-        private static MdCommentWindow _window;
+        private static MdCommentWindowHost _host;
 
         protected override void Execute()
         {
             try
             {
-                if (_window != null)
+                if (_host != null)
                 {
                     Trace.Write("action: 窗口已存在，激活");
-                    _window.Activate();
+                    _host.Activate();
                     return;
                 }
 
-                _window = new MdCommentWindow();
-                _window.Closed += (s, e) =>
+                var host = new MdCommentWindowHost();
+                host.Closed += (s, e) =>
                 {
                     Trace.Write("action: 窗口已关闭");
-                    _window = null;
+                    _host = null;
                 };
-                _window.Show();
+
+                host.Start();
+                _host = host;
                 Trace.Write("action: 窗口已打开");
             }
             catch (Exception ex)
             {
                 // 动作里抛异常会直接冒到宿主，必须自己兜住
                 Trace.Write("action failed: " + ex);
-                _window = null;
+                _host = null;
             }
         }
     }

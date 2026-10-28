@@ -1,17 +1,13 @@
 namespace SdlMdComment
 {
     using System;
-    using System.Diagnostics;
-    using System.IO;
+        using System.IO;
     using System.Windows;
-    using System.Windows.Interop;
-    using System.Web.Script.Serialization;
+        using System.Web.Script.Serialization;
 
     /// <summary>
-    /// 真正独立的悬浮窗口：不进 Studio 的停靠系统，跟 Studio 主窗口是 owner 关系
-    /// （跟着主窗口最小化、不会被主窗口盖住，但也不是全局 Topmost）。
-    ///
-    /// 事件与渲染层与原来的 ViewPart 完全复用：MdCommentPanel + StudioEvents 一行没改。
+    /// 悬浮窗口本体。跑在 MdCommentWindowHost 起的独立 STA 线程上，
+    /// 因此这里**不要**直接调 Studio 的 API —— 快照由宿主送进来。
     /// </summary>
     internal sealed class MdCommentWindow : Window
     {
@@ -20,12 +16,13 @@ namespace SdlMdComment
             "sdl-md-comment",
             "window.json");
 
-        private readonly MdCommentPanel _panel = new MdCommentPanel();
-        private readonly StudioEvents _events;
+        private readonly MdCommentPanel _panel;
 
-        public MdCommentWindow()
+        public MdCommentWindow(MdCommentPanel panel)
         {
             Trace.Write("window.ctor");
+
+            _panel = panel;
 
             Title = "MD 备注";
             Width = 620;
@@ -34,39 +31,38 @@ namespace SdlMdComment
             MinHeight = 200;
             ShowInTaskbar = true;
             WindowStartupLocation = WindowStartupLocation.Manual;
+
+            // 不设 Owner：窗口跑在独立线程上，一旦挂到 Studio（另一个线程）的窗口上，
+            // 激活就要等 Studio 的线程响应——Studio 一忙或一收尾，第一次点击只会"激活"而不执行，
+            // 表现就是标题栏按钮像失灵。改为置顶，既保持盖在 Studio 之上，又完全自成一体。
+            Topmost = true;
+
             Content = _panel;
 
             RestoreGeometry();
 
-            // owner 用本进程的主窗口句柄：Studio 是多文档的，拿 ActiveWindow 反而会跟着文档窗口跑
             SourceInitialized += OnSourceInitialized;
             Closing += OnClosing;
             Closed += OnClosed;
+        }
 
-            _events = new StudioEvents(snapshot => _panel.Show(snapshot));
-            _events.Hook();
+        /// <summary>由宿主的窗口线程调用。</summary>
+        public void ShowSnapshot(SegmentSnapshot snapshot)
+        {
+            _panel.Show(snapshot);
         }
 
         private void OnSourceInitialized(object sender, EventArgs e)
         {
             try
             {
-                // using 里包着：Process 对象本身持有一个进程句柄，忘了释放就是每开一次窗漏一个
-                using (var self = Process.GetCurrentProcess())
-                {
-                    if (self.MainWindowHandle != IntPtr.Zero)
-                    {
-                        new WindowInteropHelper(this).Owner = self.MainWindowHandle;
-                    }
-                }
-
                 // 记住的位置可能落在已拔掉的显示器上，夹回虚拟屏幕内
-                var screen = SystemParameters.VirtualScreenLeft;
+                var left = SystemParameters.VirtualScreenLeft;
                 var top = SystemParameters.VirtualScreenTop;
-                var right = screen + SystemParameters.VirtualScreenWidth;
+                var right = left + SystemParameters.VirtualScreenWidth;
                 var bottom = top + SystemParameters.VirtualScreenHeight;
 
-                Left = Math.Min(Math.Max(Left, screen), Math.Max(screen, right - Width - 40));
+                Left = Math.Min(Math.Max(Left, left), Math.Max(left, right - Width - 40));
                 Top = Math.Min(Math.Max(Top, top), Math.Max(top, bottom - Height - 40));
             }
             catch (Exception ex)
@@ -83,9 +79,6 @@ namespace SdlMdComment
         private void OnClosed(object sender, EventArgs e)
         {
             Trace.Write("window.Closed");
-
-            // 窗口关掉就把句段事件退干净；下次点按钮是全新的一套
-            _events.Dispose();
             _panel.Dispose();
         }
 

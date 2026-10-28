@@ -162,6 +162,27 @@ C# 宿主：
 
 实测：点「悬浮备注」→ trace `panel.ctor → window.ctor → StudioEvents.Hook: ok → webview loader → userDataFolder → dist → bridge <- ready`；窗口显示句段 1 的备注；再打开一份 Markdown 备注的文档，窗口内容随之切成标题 + 加粗 + 列表。
 
+#### 0.5.0 修复：标题栏按钮"失灵"
+
+现象：关闭/最小化按钮点了没反应，尤其是关掉 Studio 之后。
+
+根因有两层：
+1. 窗口建在 **Studio 的 UI 线程**上，和 Studio 共用一个消息循环 —— Studio 忙或收尾时窗口必然僵住；
+2. 窗口用 `WindowInteropHelper` 挂了 Studio 主窗口做 owner，而 owner 在**另一个线程**。于是"点击未激活的窗口"这一步只做激活，激活又要等 Studio 的线程回应；Studio 一卡，这一次点击就被吞掉，第二次点才有反应——手感就是按钮失灵。
+
+修法：
+- 窗口改到**独立 STA 线程**（`MdCommentWindowHost`），自建 `Dispatcher` + `Dispatcher.Run()`，线程设为 `IsBackground = true`（Studio 退出时进程能正常结束，不会被它拖住）；
+- **去掉 owner**，改用 `Topmost = true` 保持盖在 Studio 之上 —— 不再依赖任何跨线程激活；
+- 跨线程带来的两个必答问题：Studio API 仍只在 Studio 线程调用（`StudioEvents` 的挂载/退订都在那边），快照经窗口线程的 Dispatcher 送过去；构造期间收到的首帧快照先缓存在宿主里，窗口起来后补推（否则面板会一直显示 `—`）。
+- 顺手修了深色模式错配：`github-markdown-css` 默认会跟随系统深色切变量，导致浅色卡片里的表格/代码块出现深底浅字，改用 `github-markdown-light.css`。
+
+验证：
+- 先点 Studio 抢走焦点（让悬浮窗口处于非前台），**单击一次**最小化即生效；同样条件下单击关闭即关闭；
+- 开着窗口关 Studio：4.7s 干净退出，无残留进程/窗口；
+- 15 轮开合：WS 509→531（增长收敛、后几轮持平），**GDI 1549→1549 完全持平**，句柄 2456–2816 震荡无趋势，WebView2 进程开 1 关 0。
+
+`Topmost` 的代价是会盖住其它程序（包括浏览器）。若要"只在 Studio 之上"，需要回到 owner 方案，但那条路正是本次故障的来源，不建议。
+
 ### M3 写回（已取消）
 
 需求方确认为**只读**：不需要在面板里编辑或新增备注。因此不做 `addComment` / `updateComment`，面板不提供编辑框。

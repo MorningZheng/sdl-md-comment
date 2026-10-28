@@ -7,17 +7,19 @@ namespace SdlMdComment
     using System.Windows.Media;
     using Microsoft.Web.WebView2.Core;
     using Microsoft.Web.WebView2.Wpf;
-    using Sdl.Desktop.IntegrationApi.Interfaces;
 
     /// <summary>
     /// WebView2 宿主。加载 ui\dist 里的前端，通过 JSON-RPC 收句段快照。
+    ///
+    /// 跑在 MdCommentWindowHost 起的独立 STA 线程上（有自己的 Dispatcher），
+    /// 所以这里可以放心 await、也只会被那个线程碰。
     ///
     /// 两个必须踩对的点：
     /// 1. UserDataFolder 一定要显式指定。默认位置是宿主 exe 旁边（Program Files (x86) 下），不可写，
     ///    EnsureCoreWebView2Async 会直接抛；
     /// 2. 初始化放在 Loaded 之后异步做，Dispose 时先摘事件再 Dispose，别在没初始化完就释放。
     /// </summary>
-    public class MdCommentPanel : UserControl, IUIControl
+    public class MdCommentPanel : UserControl
     {
         private const string VirtualHost = "appassets.sdlmdcomment";
 
