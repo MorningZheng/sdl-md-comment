@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SdlMdComment</AssemblyName>
     <RootNamespace>SdlMdComment</RootNamespace>
-    <Version>0.6.1</Version>
+    <Version>0.7.0</Version>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
@@ -87,14 +87,21 @@
     <Delete Files="@(_StudioRefForManifest->'$(TargetDir)%(Filename)%(Extension)')" ContinueOnError="true" />
   </Target>
 
-  <!-- 前端产物先铺进输出目录，包清单里的 Include 就都是相对输出目录的固定路径 -->
-  <Target Name="StageUiDist" BeforeTargets="GeneratePluginManifestTarget">
+  <!-- 前端产物先铺进输出目录，包清单里的 Include 就都是相对输出目录的固定路径。
+       同时把两种位数的 WebView2 loader 各拷一份到 win-<arch>\ 下——打包工具会压平嵌套目录，
+       runtimes\win-x86\native\x.dll 进包后会和 x64 那份撞成同一个 runtimes/x.dll。 -->
+  <Target Name="StagePackageFiles" BeforeTargets="GeneratePluginManifestTarget">
     <ItemGroup>
       <_UiDistFile Include="$(MSBuildProjectDirectory)\..\..\ui\dist\**\*" />
+      <_NativeLoader Include="$(TargetDir)runtimes\win-x86\native\WebView2Loader.dll"
+                     Destination="$(TargetDir)win-x86\WebView2Loader.dll" />
+      <_NativeLoader Include="$(TargetDir)runtimes\win-x64\native\WebView2Loader.dll"
+                     Destination="$(TargetDir)win-x64\WebView2Loader.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(_UiDistFile)"
           DestinationFiles="@(_UiDistFile->'$(TargetDir)ui\dist\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_NativeLoader)" DestinationFiles="@(_NativeLoader->'%(Destination)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

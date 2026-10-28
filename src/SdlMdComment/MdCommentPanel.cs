@@ -158,6 +158,7 @@ namespace SdlMdComment
         /// <summary>
         /// .sdlplugin 打包工具会把嵌套目录压平（`runtimes\win-x86\native\x.dll` → `runtimes\x.dll`），
         /// 而 WebView2 默认只按 `runtimes\win-<arch>\native` 找 loader，所以这里自己探一遍并显式指定。
+        /// 包里放的是 `win-<arch>\WebView2Loader.dll`（两种位数各一份，16/17/18 用 x86，19 是 64 位吃 x64）。
         /// </summary>
         private static void EnsureNativeLoader()
         {
@@ -170,6 +171,7 @@ namespace SdlMdComment
             var arch = Environment.Is64BitProcess ? "win-x64" : "win-x86";
             var candidates = new[]
             {
+                Path.Combine(assemblyDir, arch),
                 Path.Combine(assemblyDir, "runtimes", arch, "native"),
                 Path.Combine(assemblyDir, "runtimes"),
                 assemblyDir,

@@ -1,9 +1,13 @@
 ﻿<#!
   sdl-md-comment 构建脚本
 
-  .\build.ps1                    编译 + 出包到 bin\Release（含 .sdlplugin）
-  .\build.ps1 -Deploy            额外铺到 Studio 的 Plugins\Unpacked\SdlMdComment，重启 Studio 即生效
-  .\build.ps1 -StudioVersion 17  切 Studio 大版本（只换引用程序集路径）
+  .\build.ps1                     编译 + 出包（bin\Release\*.sdlplugin）
+  .\build.ps1 -Deploy             额外铺到 Studio 的插件目录，重启 Studio 即生效
+  .\build.ps1 -Package            出包并复制到 dist\悬浮批注-<版本>.sdlplugin（可直接双击安装）
+
+  跨版本：
+  .\build.ps1 -StudioVersion 17                        自动找 Studio 17 的安装目录
+  .\build.ps1 -StudioVersion 17 -StudioRoot "D:\S17"   手动指定引用程序集所在目录
 
   执行策略受限时用： powershell -ExecutionPolicy Bypass -File .\build.ps1
 #>
@@ -14,7 +18,12 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
 
-    [switch]$Deploy
+    # 引用程序集所在目录；不给就按版本猜（16 在 x86 品牌目录，17+ 在 Trados 品牌目录）
+    [string]$StudioRoot,
+
+    [switch]$Deploy,
+
+    [switch]$Package
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +56,24 @@ Write-Host "msbuild: $($msbuild.FullName)"
 Write-Host "sdk    : $env:MSBuildSDKsPath"
 Write-Host "studio : $StudioVersion / $Configuration"
 
+# 引用程序集目录：没显式给就按版本猜。
+# 16（2021）在各版本里是唯一装在 Program Files (x86)\SDL 品牌目录下的，
+# 17/18/19 统一在 Program Files\Trados\Trados Studio\StudioN。
+if (-not $StudioRoot) {
+    if ($StudioVersion -eq '16') {
+        $StudioRoot = 'C:\Program Files (x86)\SDL\SDL Trados Studio\Studio16'
+    }
+    else {
+        $StudioRoot = "C:\Program Files\Trados\Trados Studio\Studio$StudioVersion"
+    }
+}
+
+if (-not (Test-Path (Join-Path $StudioRoot 'Sdl.Desktop.IntegrationApi.dll'))) {
+    throw "引用程序集不全：$StudioRoot 下没有 Sdl.Desktop.IntegrationApi.dll。装对应版本 Studio，或用 -StudioRoot 指过去。"
+}
+
+Write-Host "refs   : $StudioRoot"
+
 # restore 走 dotnet 即可，跟插件打包 task 无关
 & dotnet restore $proj
 if ($LASTEXITCODE -ne 0) {
@@ -57,6 +84,7 @@ if ($LASTEXITCODE -ne 0) {
     /nologo /v:minimal `
     /p:Configuration=$Configuration `
     /p:StudioVersion=$StudioVersion `
+    /p:StudioRoot=$StudioRoot `
     /p:CreatePluginPackage=true `
     /p:MSBuildEnableWorkloadResolver=false
 
@@ -67,6 +95,17 @@ if ($LASTEXITCODE -ne 0) {
 $out = Join-Path $root "src\SdlMdComment\bin\$Configuration"
 Write-Host "output: $out"
 Get-ChildItem $out -File | Select-Object Name, Length | Format-Table -AutoSize
+
+if ($Package) {
+    $dist = Join-Path $root 'dist'
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    $pkg = Join-Path $out 'SdlMdComment.sdlplugin'
+    # 包里没有文件版本信息，版本从插件程序集读
+    $version = [System.Reflection.AssemblyName]::GetAssemblyName((Join-Path $out 'SdlMdComment.dll')).Version.ToString()
+    $target = Join-Path $dist "悬浮批注-$version.sdlplugin"
+    Copy-Item $pkg $target -Force
+    Write-Host "package: $target  ($([math]::Round((Get-Item $target).Length/1MB,2)) MB)"
+}
 
 if (-not $Deploy) {
     exit 0

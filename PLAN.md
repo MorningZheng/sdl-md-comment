@@ -197,13 +197,48 @@ C# 宿主：
 - 面板内 Markdown 编辑框 → `AddCommentOnSegment` 写回（原生备注里存 Markdown 源码，Studio 原生窗口可见纯文本）
 - **验收**：面板新增备注 → Studio 原生备注窗口可见同一文本；保存 sdlxliff 后重开不丢
 
-### M4 多版本出包（约 0.5–1 天）
-- Directory.Build.props 矩阵：StudioVersion 切 HintPath（Studio16/17/18/19）、RequiredProduct 区间、部署路径
-- 16=AnyCPU + `Program Files (x86)\SDL\...`；19=AnyCPU（64 位进程可加载）+ `Program Files\Trados\...Studio19`
-- **引用程序集来源要先解决**：本机只有 Studio16 的 `Sdl.*` DLL，17/18/19 的 HintPath 无源可指。两条路二选一——①装 17/18/19 取引用（真机矩阵）；②只编 16 一份二进制，靠强名称重定向跨版本加载（需实测 17/18/19 是否放行，官方自己都按大版本各编一份，风险高）
-- **`WebView2Loader.dll` 位数随矩阵走**：16/17/18 是 32 位宿主 → x86 loader；19 是 64 位 → x64 loader。两个同名 native DLL 无法并存于插件根目录，所以只能按版本分包
-- build.ps1 全矩阵出 4 个 .sdlplugin；AppStore 分发按版本各一包
-- **验收**：16.2 真机全功能回归；17/18/19 至少装机启动不崩、面板出现、跟随正常（19 需 64 位验证 WebView2）
+### M4 多版本出包（0.7.0）
+
+**产出**：`dist\悬浮批注-0.7.0.0.sdlplugin`（2.26 MB，自包含）。
+
+包内结构（打包工具会压平嵌套目录，清单里的路径都按"第一层目录 + 文件名"落盘）：
+
+```
+SdlMdComment.dll                插件本体
+SdlMdComment.plugin.xml         由 [Action] 生成
+SdlMdComment.plugin.resources   名称/图标
+pluginpackage.manifest.xml      产品版本区间
+Microsoft.Web.WebView2.*.dll    托管层（Core / WinForms / Wpf）
+win-x86\WebView2Loader.dll      32 位宿主（2021/2022/2024）
+win-x64\WebView2Loader.dll      64 位宿主（2026）
+ui\index.html, app.js, app.css  渲染层
+```
+
+**版本支持**：manifest 声明 `<RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="19.9"/>`，即 2021(16)/2022(17)/2024(18)/2026(19) 一个包覆盖。
+
+| 版本 | 状态 |
+|---|---|
+| 2021 (16.2.10) | **已实测**：双击/放入 Packages → Studio 自行解包 → 按钮出现 → 开窗正常 → loader 从 `win-x86` 解析、前端从 `ui` 解析 |
+| 2022 / 2024 (17/18) | 未实测（本机无安装）。同代 net48 32 位宿主，理论一致 |
+| 2026 (19) | 未实测。64 位宿主，已备 `win-x64` loader；`Environment.Is64BitProcess` 选路 |
+
+未实测的**真实风险**：我们编译时引用的 `Sdl.*` 程序集版本是 `16.0.0.0`。Studio 16 的 `SDLTradosStudio.exe.config` 里**没有**针对 `Sdl.Desktop.IntegrationApi` / `Sdl.TranslationStudioAutomation.IntegrationApi` 的 bindingRedirect（只有 `Sdl.ApiClientSdk.Core` 一条）。若 17/18/19 把这些程序集版本号抬高了，插件会加载失败——官方自己留三个分支分别编译，原因就在这里。
+
+**应对**：`build.ps1` 现在支持按版本出包：
+
+```powershell
+.\build.ps1 -StudioVersion 17 -Package                  # 自动找 C:\Program Files\Trados\Trados Studio\Studio17
+.\build.ps1 -StudioVersion 17 -StudioRoot "D:\S17" -Package   # 或手动指引用程序集目录
+```
+
+拿到 17/18/19 的安装（或只把它们的 `Sdl.*.dll` 拷一份过来），各出一包即可，源码零改动。
+
+**安装方式**（给用户）：
+1. 双击 `.sdlplugin` → 系统按文件关联调起 `Sdl.Community.SdlPluginInstaller.exe`（Studio 自带）；
+2. 或把它丢进 `%AppData%\SDL\SDL Trados Studio\<版本号>\Plugins\Packages\`，重启 Studio；
+3. 打开「附加功能 → 悬浮批注」。
+
+**卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
 
 ## 五、关键约定
 

@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PluginPackage xmlns="http://www.sdl.com/Plugins/PluginPackage/1.0">
-  <PlugInName>sdl-md-comment</PlugInName>
-  <Version>0.6.1.0</Version>
-  <Description>以 Markdown / HTML 渲染当前句段的备注</Description>
+  <PlugInName>悬浮批注</PlugInName>
+  <Version>0.7.0.0</Version>
+  <Description>以 Markdown / HTML 渲染当前句段备注的悬浮窗口（只读）</Description>
   <Author>zheng</Author>
-  <RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="16.9" />
+  <!-- 16=2021 17=2022 18=2024 19=2026：一个包覆盖 2021 起的全部版本 -->
+  <RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="19.9" />
   <Include>
     <!-- WebView2 托管层 -->
     <File>Microsoft.Web.WebView2.Core.dll</File>
     <File>Microsoft.Web.WebView2.WinForms.dll</File>
     <File>Microsoft.Web.WebView2.Wpf.dll</File>
 
-    <!-- 原生 loader：16/17/18 是 32 位宿主，只放 x86 这一份 -->
-    <File>runtimes\win-x86\native\WebView2Loader.dll</File>
+    <!-- 原生 loader：两种位数各一份。16/17/18 是 32 位宿主吃 win-x86，19 是 64 位宿主吃 win-x64 -->
+    <File>win-x86\WebView2Loader.dll</File>
+    <File>win-x64\WebView2Loader.dll</File>
 
     <!-- 渲染层产物，文件名固定（vite 里关掉了内容 hash） -->
     <File>ui\dist\index.html</File>

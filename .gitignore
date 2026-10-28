@@ -1,5 +1,6 @@
 bin/
 obj/
+dist/
 .scratch/
 ui/node_modules/
 ui/dist/
