@@ -9,13 +9,14 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SdlMdComment</AssemblyName>
     <RootNamespace>SdlMdComment</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <!-- Studio 自己有这些 Sdl.* 程序集，插件里绝不能复制一份进来 -->
-    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- Studio 自己有这些 Sdl.* 程序集，插件里绝不能复制一份进来。
+       但 NuGet 来的（WebView2）必须落到输出目录，Studio 才不会找不到。 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -32,10 +33,13 @@
 
   <ItemGroup>
     <PackageReference Include="Sdl.Core.PluginFramework.Build" Version="16.1.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
   </ItemGroup>
 
   <!-- 编译期引用本机 Studio 安装目录；Private=false 防止被拷进 bin 与宿主重复 -->
   <ItemGroup>
+    <!-- JavaScriptSerializer：桥的 JSON 编解码，.NET Framework 自带，不引第三方 -->
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="Sdl.Core.PluginFramework">
       <HintPath>$(StudioRoot)\Sdl.Core.PluginFramework.dll</HintPath>
       <Private>false</Private>

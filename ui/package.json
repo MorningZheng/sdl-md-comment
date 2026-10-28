@@ -1,0 +1,22 @@
+{
+  "name": "sdl-md-comment-ui",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch --minify false",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.4",
+    "github-markdown-css": "^5.8.1",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

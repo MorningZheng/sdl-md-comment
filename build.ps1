@@ -115,5 +115,32 @@ foreach ($entry in $zip.Entries) {
 $zip.Dispose()
 Write-Host "unpacked: $unpacked"
 
+# WebView2 的托管 DLL 与原生 loader 目前不进 .sdlplugin（M4 出正式包时再补 Include），
+# 直接从构建输出铺过去。loader 走 runtimes\win-<arch>\native，WebView2 在 net48 下按进程位数找这里。
+Get-ChildItem $out -Filter 'Microsoft.Web.WebView2.*.dll' | ForEach-Object {
+    Copy-Item $_.FullName $unpacked -Force
+}
+$runtimes = Join-Path $out 'runtimes'
+if (Test-Path $runtimes) {
+    Copy-Item $runtimes (Join-Path $unpacked 'runtimes') -Recurse -Force
+}
+
+# 前端产物：建目录联接指回仓库的 ui\dist，`npm run watch` 写完直接 F5 就生效，不用重编插件
+$uiDist = Join-Path $root 'ui\dist'
+if (Test-Path (Join-Path $uiDist 'index.html')) {
+    $uiParent = Join-Path $unpacked 'ui'
+    New-Item -ItemType Directory -Force -Path $uiParent | Out-Null
+    $link = Join-Path $uiParent 'dist'
+    if (Test-Path $link) {
+        Remove-Item $link -Recurse -Force
+    }
+    New-Item -ItemType Junction -Path $link -Target $uiDist | Out-Null
+    Write-Host "ui      : $link -> $uiDist"
+}
+else {
+    Write-Warning "ui\dist 不存在，面板会报找不到前端产物；先在 ui 目录跑 npm run build"
+}
+
+
 
 

@@ -116,6 +116,34 @@ sdl-md-comment/
 - 严重级别配色（High 红 / Medium 橙 / Low 黄）+ 作者/时间戳
 - **验收**：含 `# 标题`、表格、代码块、链接的备注渲染成 GitHub 风格页面；F12 DevTools 可断点；改 `ui/src` 保存后 F5 即生效（不重编插件）
 
+#### M2 实施记录（已通过）
+
+前端（`ui/`，Vite 6 + TS + markdown-it 14 + highlight.js 11 + DOMPurify 3 + github-markdown-css 5）：
+- `protocol.ts` 是协议唯一事实源；`bridge.ts` 是 ~60 行 JSON-RPC（id 关联 Promise、method 分发事件），没有宿主（浏览器里）时 `call` reject、`notify` 静默丢弃，可以直接用浏览器调 UI。
+- `render.ts` 统一净化：Markdown 渲染出的 HTML 和 `<!--html-->` 直通走同一条 DOMPurify，禁用 `style/form/input/button/iframe/object/embed`；`highlight.js` 走 markdown-it 的 `highlight` 回调，输出 `<pre class="hljs">`。
+- 产物名固定（`app.js` / `app.css` / `index.html`，关掉内容 hash），既是插件按固定路径加载的前提，也是以后能写进包清单的前提。
+
+C# 宿主：
+- `CoreWebView2Environment.CreateAsync(null, userDataFolder)`，`userDataFolder = %LocalAppData%\sdl-md-comment\webview2`——**这条是硬要求**，默认位置在 `Program Files (x86)` 下必然抛异常。
+- 原生 loader 不用管：net48 下 WebView2 按进程位数去 `runtimes\win-<arch>\native\WebView2Loader.dll` 找，SDK 包已经把它铺在输出目录里了，**不需要**再平铺一份到插件根目录。
+- 托管 DLL（`Microsoft.Web.WebView2.{Core,Wpf,WinForms}.dll`）必须落到输出目录：`CopyLocalLockFileAssemblies=false` 时它们不会复制，改成 `true` 才有——改完 Sdl.* 因为 `Private=false` 仍然不会被带进来。
+- 初始化仍放 `Loaded` 之后异步做；`Dispose` 先摘 `WebMessageReceived` 再 `Dispose()`。
+- 起不来时（例如目标机器没装运行时）面板显示错误文案 + 指向 trace.log，不留空白。
+
+部署：
+- WebView2 运行时与 `ui/dist` 目前**不进 `.sdlplugin`**（M4 再补 `Include`），`build.ps1 -Deploy` 从 `bin\Release` 额外铺 `Microsoft.Web.WebView2.*.dll` 与 `runtimes\`。
+- `ui\dist` 用**目录联接**指回仓库：`npm run watch` 写完直接 F5 就生效，不用重编插件、不用重新部署。
+
+实测（Studio 16.2.10）：
+- trace：`panel.ctor → webview userDataFolder → webview dist → bridge <- ready`，随后 `ActiveDocumentChanged`。
+- HTML 直通：`<!--html-->` 开头的备注渲染出 `<h3>`、`<strong>`、`<em>`，其中的 `<script>alert(1)</script>` 被 DOMPurify 摘掉。
+- Markdown：`# 稳定性总结` 渲染成标题、`**Markdown**` 加粗、`- 列表项` 成列表；表格与代码块在滚动区下方（面板高度按 `ViewPartLayout Height=240`）。
+- 打开第三个文档时再次触发 `ActiveDocumentChanged`，面板随之切换，未崩。
+
+踩到的两个环境问题（与插件无关，但会挡住构建）：
+- 本机没有全局 Node，用的是 `D:\Object\board\node-v24.21.0-win-x64`（v24.21.0 / npm 11.19.0），命令前把它加进 PATH。
+- esbuild 默认往 `%TEMP%` 写临时文件，在这台机器上删除时可能报 `Access is denied` 导致 `vite build` 失败。把 `TMP`/`TEMP` 指到工作区内（例如 `.scratch\tmp`）即可稳定复现通过。
+
 ### M3 桥与写回（可选，约 0.5–1 天）
 - BridgeDispatcher：`getComments` 拉取 + 事件推送统一走 JSON-RPC（id 关联 Promise、错误透传）
 - 面板内 Markdown 编辑框 → `AddCommentOnSegment` 写回（原生备注里存 Markdown 源码，Studio 原生窗口可见纯文本）

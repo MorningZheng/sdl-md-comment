@@ -1,165 +1,207 @@
 namespace SdlMdComment
 {
     using System;
+    using System.IO;
     using System.Windows;
     using System.Windows.Controls;
     using System.Windows.Media;
+    using Microsoft.Web.WebView2.Core;
+    using Microsoft.Web.WebView2.Wpf;
     using Sdl.Desktop.IntegrationApi.Interfaces;
 
     /// <summary>
-    /// M1 的面板：显示当前句段号和它的备注（纯文本）。
-    /// 仍是代码构建 UI，没有 XAML——M2 换成 WebView2 时这里整块会被替换掉。
+    /// WebView2 宿主。加载 ui\dist 里的前端，通过 JSON-RPC 收句段快照。
+    ///
+    /// 两个必须踩对的点：
+    /// 1. UserDataFolder 一定要显式指定。默认位置是宿主 exe 旁边（Program Files (x86) 下），不可写，
+    ///    EnsureCoreWebView2Async 会直接抛；
+    /// 2. 初始化放在 Loaded 之后异步做，Dispose 时先摘事件再 Dispose，别在没初始化完就释放。
     /// </summary>
     public class MdCommentPanel : UserControl, IUIControl
     {
-        private static readonly Color High = Color.FromRgb(0xC6, 0x28, 0x28);
-        private static readonly Color Medium = Color.FromRgb(0xEF, 0x6C, 0x00);
-        private static readonly Color Low = Color.FromRgb(0xF9, 0xA8, 0x25);
-        private static readonly Color Undefined = Color.FromRgb(0x75, 0x75, 0x75);
+        private const string VirtualHost = "appassets.sdlmdcomment";
 
-        private readonly TextBlock _segment = new TextBlock
+        private readonly WebView2 _webView = new WebView2 { Visibility = Visibility.Collapsed };
+
+        private readonly TextBlock _status = new TextBlock
         {
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(12),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x6E, 0x77, 0x81)),
+            Text = "正在启动 WebView2…",
         };
 
-        private readonly TextBlock _meta = new TextBlock
-        {
-            FontSize = 11,
-            Opacity = 0.6,
-            Margin = new Thickness(0, 2, 0, 8),
-        };
-
-        private readonly StackPanel _comments = new StackPanel();
+        private SegmentSnapshot _pending;
+        private bool _coreReady;
+        private bool _initialized;
+        private bool _disposed;
 
         public MdCommentPanel()
         {
             Trace.Write("panel.ctor");
 
-            var header = new StackPanel
-            {
-                Margin = new Thickness(12, 10, 12, 0),
-                Children = { _segment, _meta },
-            };
-
-            var scroll = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = _comments,
-                Margin = new Thickness(12, 0, 12, 10),
-            };
-
-            var root = new DockPanel();
-            DockPanel.SetDock(header, Dock.Top);
-            root.Children.Add(header);
-            root.Children.Add(scroll);
+            var root = new Grid();
+            root.Children.Add(_webView);
+            root.Children.Add(_status);
             Content = root;
 
-            Show(null);
+            Loaded += OnLoaded;
         }
 
         /// <summary>由 StudioEvents 在 UI 线程上调用。</summary>
         internal void Show(SegmentSnapshot snapshot)
         {
-            _comments.Children.Clear();
+            _pending = snapshot;
 
-            if (snapshot == null || snapshot.SegmentId == null)
+            if (!_coreReady)
             {
-                _segment.Text = "—";
-                _meta.Text = "没有打开的文档，或光标还没落进任何句段";
+                // 前端还没就绪（或者 WebView2 起不来），先记着，ready 之后补推
                 return;
             }
 
-            _segment.Text = "句段 " + snapshot.SegmentId;
+            PostSnapshot(snapshot);
+        }
 
-            if (snapshot.Comments.Count == 0)
+        private async void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            if (_initialized || _disposed)
             {
-                _meta.Text = "本句段没有备注";
-                _comments.Children.Add(new TextBlock
+                return;
+            }
+
+            _initialized = true;
+
+            try
+            {
+                await InitializeWebViewAsync();
+            }
+            catch (Exception ex)
+            {
+                // WebView2 起不来（没装运行时是常见情况）不能让面板空着
+                Trace.Write("webview init failed: " + ex);
+                ShowError(ex);
+            }
+        }
+
+        private async System.Threading.Tasks.Task InitializeWebViewAsync()
+        {
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "sdl-md-comment",
+                "webview2");
+
+            Directory.CreateDirectory(userDataFolder);
+            Trace.Write("webview userDataFolder: " + userDataFolder);
+
+            var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await _webView.EnsureCoreWebView2Async(environment);
+
+            if (_disposed)
+            {
+                return;
+            }
+
+            var core = _webView.CoreWebView2;
+
+            // 开发期要能 F12，也要能右键刷新
+            core.Settings.AreDevToolsEnabled = true;
+            core.Settings.AreDefaultContextMenusEnabled = true;
+            core.Settings.IsStatusBarEnabled = false;
+
+            // 面板里的链接一律不外跳、不弹窗：WebView 不能被导航走
+            core.NewWindowRequested += (s, args) => args.Handled = true;
+            core.NavigationStarting += (s, args) => args.Cancel = false;
+            core.WebMessageReceived += OnWebMessageReceived;
+
+            var dist = FindDist();
+            if (dist == null)
+            {
+                throw new DirectoryNotFoundException(
+                    "找不到前端产物：ui\\dist\\index.html。先在 ui 目录跑 npm run build，再用 build.ps1 -Deploy 部署。");
+            }
+
+            Trace.Write("webview dist: " + dist);
+            core.SetVirtualHostNameToFolderMapping(VirtualHost, dist, CoreWebView2HostResourceAccessKind.Allow);
+
+            _coreReady = true;
+            core.Navigate($"https://{VirtualHost}/index.html");
+
+            _status.Visibility = Visibility.Collapsed;
+            _webView.Visibility = Visibility.Visible;
+        }
+
+        private static string FindDist()
+        {
+            // 插件目录下的 ui\dist。开发时这里是 build.ps1 建出来的目录联接，
+            // 指向仓库的 ui\dist，vite build --watch 写完直接 F5 就生效，不用重编插件。
+            var assemblyDir = Path.GetDirectoryName(typeof(MdCommentPanel).Assembly.Location);
+            if (string.IsNullOrEmpty(assemblyDir))
+            {
+                return null;
+            }
+
+            var dist = Path.Combine(assemblyDir, "ui", "dist");
+            return File.Exists(Path.Combine(dist, "index.html")) ? dist : null;
+        }
+
+        private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try
+            {
+                var method = Bridge.ReadMethod(e.WebMessageAsJson);
+                Trace.Write("bridge <- " + (method ?? "(unknown)"));
+
+                if (method == "ready" && _pending != null)
                 {
-                    Text = "在 Studio 里给这个句段加一条备注，切回来就会显示在这里。",
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 12,
-                    Opacity = 0.55,
-                });
-                return;
+                    PostSnapshot(_pending);
+                }
             }
-
-            _meta.Text = $"{snapshot.Comments.Count} 条备注";
-
-            foreach (var comment in snapshot.Comments)
+            catch (Exception ex)
             {
-                _comments.Children.Add(BuildComment(comment));
+                Trace.Write("bridge receive failed: " + ex);
             }
         }
 
-        private static FrameworkElement BuildComment(CommentDto comment)
+        private void PostSnapshot(SegmentSnapshot snapshot)
         {
-            var color = SeverityColor(comment.Severity);
-
-            var body = new TextBlock
+            try
             {
-                Text = comment.Text ?? string.Empty,
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 12.5,
-            };
-
-            var author = string.IsNullOrWhiteSpace(comment.Author) ? "(未知作者)" : comment.Author;
-            var meta = new TextBlock
+                _webView.CoreWebView2?.PostWebMessageAsJson(Bridge.SegmentChanged(snapshot));
+            }
+            catch (Exception ex)
             {
-                Text = $"{SeverityLabel(comment.Severity)} · {author} · {comment.Date:yyyy-MM-dd HH:mm}",
-                FontSize = 10.5,
-                Opacity = 0.6,
-                Margin = new Thickness(0, 4, 0, 0),
-            };
-
-            var stack = new StackPanel { Margin = new Thickness(9, 6, 0, 6) };
-            stack.Children.Add(body);
-            stack.Children.Add(meta);
-
-            return new Border
-            {
-                BorderThickness = new Thickness(3, 0, 0, 0),
-                BorderBrush = new SolidColorBrush(color),
-                Background = new SolidColorBrush(Color.FromArgb(12, color.R, color.G, color.B)),
-                Margin = new Thickness(0, 0, 4, 6),
-                Child = stack,
-            };
-        }
-
-        private static Color SeverityColor(string severity)
-        {
-            switch (severity)
-            {
-                case "high":
-                    return High;
-                case "medium":
-                    return Medium;
-                case "low":
-                    return Low;
-                default:
-                    return Undefined;
+                Trace.Write("post failed: " + ex);
             }
         }
 
-        private static string SeverityLabel(string severity)
+        private void ShowError(Exception ex)
         {
-            switch (severity)
-            {
-                case "high":
-                    return "高";
-                case "medium":
-                    return "中";
-                case "low":
-                    return "低";
-                default:
-                    return "未定级";
-            }
+            _webView.Visibility = Visibility.Collapsed;
+            _status.Visibility = Visibility.Visible;
+            _status.Foreground = new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28));
+            _status.Text = "WebView2 启动失败：" + ex.Message
+                + Environment.NewLine + Environment.NewLine
+                + "确认已安装 WebView2 Evergreen 运行时；详情见 %LocalAppData%\\sdl-md-comment\\trace.log";
         }
 
         public void Dispose()
         {
-            // 事件退订在控制器那边做；这里等 M2 接了 WebView2 再负责释放它
+            _disposed = true;
+
+            try
+            {
+                if (_webView.CoreWebView2 != null)
+                {
+                    _webView.CoreWebView2.WebMessageReceived -= OnWebMessageReceived;
+                }
+
+                (_webView as IDisposable)?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.Write("panel.Dispose failed: " + ex);
+            }
         }
     }
 }
