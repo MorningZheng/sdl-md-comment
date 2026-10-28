@@ -37,6 +37,23 @@ namespace SdlMdComment
         private bool _initialized;
         private bool _disposed;
 
+        /// <summary>
+        /// SetLoaderDllFolderPath 有个硬约束：**必须在进程内第一次碰 CoreWebView2Environment 之前**调用，
+        /// 之后再调会抛「The function should be called before any other API is called」。
+        /// 所以放静态构造里只执行一次——关掉窗口再打开时不能再碰它。
+        /// </summary>
+        static MdCommentPanel()
+        {
+            try
+            {
+                EnsureNativeLoader();
+            }
+            catch (Exception ex)
+            {
+                Trace.Write("static ctor: loader probe failed: " + ex.Message);
+            }
+        }
+
         public MdCommentPanel()
         {
             Trace.Write("panel.ctor");
@@ -78,17 +95,19 @@ namespace SdlMdComment
             }
             catch (Exception ex)
             {
-                // WebView2 起不来（没装运行时是常见情况）不能让面板空着
+                // WebView2 起不来（没装运行时是常见情况）不能让面板空着。
+                // 但如果在初始化途中窗口就被关了，控件已经 Dispose，再碰 UI 会二次抛异常，
+                // 而 async void 里的二次异常会直接冒到宿主——只记日志。
                 Trace.Write("webview init failed: " + ex);
-                ShowError(ex);
+                if (!_disposed)
+                {
+                    ShowError(ex);
+                }
             }
         }
 
         private async System.Threading.Tasks.Task InitializeWebViewAsync()
         {
-            // 必须在第一次碰 WebView2 之前指定原生 loader 的位置
-            EnsureNativeLoader();
-
             var userDataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "sdl-md-comment",
@@ -226,9 +245,22 @@ namespace SdlMdComment
 
         private void ShowError(Exception ex)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _webView.Visibility = Visibility.Collapsed;
             _status.Visibility = Visibility.Visible;
             _status.Foreground = new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28));
+
+            // 缺前端产物和 WebView2 起不来是两回事，别给不相干的建议
+            if (ex is DirectoryNotFoundException)
+            {
+                _status.Text = ex.Message;
+                return;
+            }
+
             _status.Text = "WebView2 启动失败：" + ex.Message
                 + Environment.NewLine + Environment.NewLine
                 + "确认已安装 WebView2 Evergreen 运行时；详情见 %LocalAppData%\\sdl-md-comment\\trace.log";

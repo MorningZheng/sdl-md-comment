@@ -206,6 +206,59 @@ C# 宿主：
 ## 七、前置环境
 
 - .NET Framework 4.8 Developer Pack、VS2022 或 `dotnet build`（net48）
-- Node ≥ 18（前端 Vite）
+- Node ≥ 18（前端 Vite）——本机用的是便携版 `D:\Object\board\node-v24.21.0-win-x64`
 - WebView2 Evergreen Runtime（Win10/11 一般自带）
 - 本机 Trados Studio 2021 16.2.10（调试宿主）
+
+## 八、测试记录（2026-10-28，Studio 16.2.10）
+
+脚本在 `.scratch/`（不入库）：`cycle-test.ps1` 开合循环、`open-window.ps1` 开窗口并读内容、`capture-window.ps1` 截图、`quit-studio.ps1` 退出测试。
+
+### 内存与句柄（开关悬浮窗口）
+
+| 轮次 | WS(MB) | Private(MB) | Handles | GDI | USER | WebView2 进程 |
+|---|---|---|---|---|---|---|
+| 0（关） | 518 | 408 | 2676 | 1542 | 828 | 0 |
+| 15（关） | 523 | 412 | 2598 | 1542 | 828 | 0 |
+
+- WS 15 轮 +5MB（≈0.33MB/轮），私有内存 +4MB；**GDI/USER 完全持平**，句柄在 2517–2742 之间震荡、无趋势 —— 没有泄漏特征。
+- WebView2 进程开窗时 1 个（约 100MB）、关窗后归零，反复 15 次不堆积。
+- 0.4.2 最终构建再回归 5 轮，同样稳定。
+
+### 竞态（开窗后 400ms 内关闭）
+
+**测出并修复了一个真 bug**：`CoreWebView2Environment.SetLoaderDllFolderPath()` 只能在进程内第一次碰该类型之前调用，第二次调用抛 `InvalidOperationException`，表现是**关掉窗口再打开就只剩错误面板**。修法：移到静态构造函数里只执行一次。
+
+追加的防御：初始化过程中窗口被关掉时，控件已 Dispose，若再走 `ShowError()` 会二次抛异常（`async void` 里的二次异常会直接冒到宿主），因此 catch 里先判 `_disposed`。
+
+### 资源缺失兜底
+
+把 `Unpacked\SdlMdComment\ui` 整个挪走再开窗：面板显示「找不到前端产物：ui\dist\index.html。先在 ui 目录跑 npm run build，再用 build.ps1 -Deploy 部署。」，Studio 不崩；把目录挪回后再次开窗即恢复（无需重启 Studio）。
+
+### 内容边界
+
+构造了一份 3330 句段全部挂同一段压测备注的 sdlxliff（副本，不动原件）：
+
+| 输入 | 结果 |
+|---|---|
+| 数百字长段 | 正常换行、滚动，不撑破布局 |
+| emoji 🚀🔥🧪 + 中文标点 + 阿拉伯文 RTL | 正常渲染 |
+| `<img src=x onerror=alert()>` | 图片保留、`onerror` 被摘；无弹窗 |
+| `<script>` / `<iframe>` / `<svg onload>` | 完全移除 |
+| `[点我](javascript:alert())` | markdown-it 拒绝该协议，退化成纯文本 |
+| 未闭合 ``` 代码块 | 把后续内容都收进代码块 —— Markdown 标准行为 |
+| `<img>` 无 alt | 显示 WebView 的「缺少图片说明」占位 |
+
+### 退出
+
+开着悬浮窗口直接关 Studio：5.1 秒干净退出，`msedgewebview2` 无残留，`DocumentClosed` 事件处理未抛异常。
+
+### 未覆盖
+
+- **机器上没有 WebView2 运行时**的路径（无法卸载模拟；只能确认错误分支会显示提示而非白屏）
+- 多显示器 + 混合 DPI 下的窗口位置记忆（本机两屏但缩放一致）
+- 连续使用数小时后的表现（只做了分钟级循环）
+
+### 一个测试本身的坑
+
+抓悬浮窗口时坐标一直对不上：`GetWindowRect` 在非 DPI 感知进程里返回的是**虚拟化后的逻辑坐标**，而 `CopyFromScreen` 按物理像素取图，两者差 1.5 倍。脚本里先调 `SetProcessDPIAware()` 才对齐。另外 `PrintWindow` 抓 WebView2 会拿到**过期的 GPU 层**（内容按旧宽度排版、右侧被切），判断布局是否正确要看子窗口实际尺寸（`Chrome_WidgetWin_0` 605×423 == 客户区 605×422 即为对齐）或直接屏幕截图。

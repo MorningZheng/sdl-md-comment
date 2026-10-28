@@ -51,10 +51,13 @@ namespace SdlMdComment
         {
             try
             {
-                var studio = Process.GetCurrentProcess().MainWindowHandle;
-                if (studio != IntPtr.Zero)
+                // using 里包着：Process 对象本身持有一个进程句柄，忘了释放就是每开一次窗漏一个
+                using (var self = Process.GetCurrentProcess())
                 {
-                    new WindowInteropHelper(this).Owner = studio;
+                    if (self.MainWindowHandle != IntPtr.Zero)
+                    {
+                        new WindowInteropHelper(this).Owner = self.MainWindowHandle;
+                    }
                 }
 
                 // 记住的位置可能落在已拔掉的显示器上，夹回虚拟屏幕内
