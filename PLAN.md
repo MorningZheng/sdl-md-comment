@@ -40,11 +40,15 @@ sdl-md-comment/
 │       ├── SdlMdComment.csproj
 │       ├── SdlMdComment.snk
 │       ├── pluginpackage.manifest.xml
-│       ├── MdCommentViewPartController.cs    # ViewPart 注册
-│       ├── StudioEvents.cs                   # ActiveSegmentChanged 订阅与转发
-│       ├── CommentReader.cs                  # GetCommentsFromSegment 封装
-│       ├── BridgeDispatcher.cs               # JSON-RPC 分发（方法表 + id 关联）
-│       └── MdCommentPanel.xaml(.cs)          # WPF 宿主：WebView2 初始化 + 虚拟主机映射
+│       ├── PluginResources.resx              # 名称/描述/图标，plugin.xml 里存的是键名
+│       ├── PluginInfo.cs                     # [assembly: Plugin(...)]，缺它报 PFE004
+│       ├── MdCommentViewPartController.cs    # ViewPart 注册（面板延迟创建）
+│       ├── MdCommentPanel.cs                 # 面板 UI（M0 无 XAML，代码构建）
+│       ├── Trace.cs                          # 写 %LocalAppData%\sdl-md-comment\trace.log
+│       ├── icon.ico                          # ViewPart 图标，RWS 自家面板都有，缺了不注册
+│       ├── StudioEvents.cs                   # M1：ActiveSegmentChanged 订阅与转发
+│       ├── CommentReader.cs                  # M1：GetCommentsFromSegment 封装
+│       └── BridgeDispatcher.cs               # M3：JSON-RPC 分发（方法表 + id 关联）
 └── ui/                        # 前端（Vite + TS）
     ├── package.json
     ├── src/
@@ -62,6 +66,23 @@ sdl-md-comment/
 - **开发期不做 OPC 打包**：直接把产物目录丢进 `%AppData%\SDL\SDL Trados Studio\16\Plugins\Unpacked\SdlMdComment\`（含 `pluginpackage.manifest.xml` + `.plugin.xml` + dll），Studio 扫 Unpacked 即加载；`Packages\*.sdlplugin` 只在 M4 出包时用
 - 部署后附加 SDLTradosStudio.exe 调试；加载失败先看 `%AppData%\SDL\SDL Trados Studio\Studio16\logs\`
 - **验收**：Studio 打开任意双语文件 → 视图功能区出现面板，可拖动/浮动/缩放/关闭/重开
+
+#### M0 实施记录（2026-10-28，Studio 16.2.10 实测通过）
+
+踩到的坑，按顺序：
+
+1. **打包 task 必须跑在 .NET Framework 版 MSBuild 上**（`Sdl.Core.PluginFramework.BuildTasks.dll` 是 net48），`dotnet build` 加载不了它，插件清单根本不会生成。
+2. **VS 的 MSBuild 不带 .NET SDK 解析器**，SDK 式工程报 `MSB4236 找不到 Microsoft.NET.Sdk`。解法：显式设 `MSBuildSDKsPath=<dotnet sdk>\<ver>\Sdks` 并 `-p:MSBuildEnableWorkloadResolver=false`（workload 自动导入同样依赖那套解析器）。restore 仍可走 `dotnet restore`。
+3. **必须显式引用 `Sdl.Core.PluginFramework`**：`[assembly: Plugin("Plugin_Name")]`。没有它，task 报 `PFE004 Assembly could not be found`——它要求插件程序集自己有对框架的引用。
+4. **`PluginResources.resx` 是必需的**（`PFE100`），plugin.xml 里的 name/description 存的是**资源键**而不是字面量，键值在生成出来的 `.plugin.resources` 里。
+5. **`Icon` 不能省**：`.plugin.resources` 里存的是 `System.Drawing.Icon` 对象，RWS 自家的 ViewPart 全都带 `Icon`。resx 用 `System.Resources.ResXFileRef` 指向 `icon.ico` 即可，task 会正确序列化成 Icon。
+6. **面板必须延迟创建**：控制器可能在非 UI 线程上被构造，WPF 控件在非 STA 线程 `new` 会抛异常，而 **Studio 会吞掉扩展加载期的异常**（日志里一个字都没有）。用 `Lazy<MdCommentPanel>`，并自己往 `%LocalAppData%\sdl-md-comment\trace.log` 记痕，否则只能盲猜。
+7. **task 反射加载插件时需要引用程序集能解析到**：`Private=false` 的话宿主的 `Sdl.*.dll` 不在输出目录，task 找不到。做法是生成清单前临时拷进 `$(TargetDir)`、生成完按输出目录路径删掉（别删 `@(_StudioRefForManifest)` 本身，那指向 Studio 安装目录里的原件）。
+8. **Studio 只在 `Unpacked\SdlMdComment` 不存在时才解包 `.sdlplugin`**，改版本号也不重解。所以 `build.ps1 -Deploy` 直接把包里的部件铺到 Unpacked（OPC 的 `_rels/`、`[Content_Types].xml`、`package/` 跳过）；Studio 开着时 DLL 被占用会失败，先关 Studio 再部署。
+9. **部署后不会自动进布局**：`视图` 页签里会多出「MD 备注」按钮，点一下才把面板停到编辑器底部；`重置窗口布局` 也能让它归位。这是 Studio 的既有行为，不是插件问题。
+10. 手开文档要用文件关联那个开关：`SDLTradosStudio.exe /openDocument "<path>"`；裸路径不会打开。Studio 是单实例，命令行会转交给已在运行的实例。
+
+验收结果：编辑器视图底部出现「MD 备注」面板（`视图` 页签按钮 + 图标正常），显示 `sdl-md-comment loaded` 与程序集/CLR/OS 版本；`controller.ctor → Initialize → GetContentControl → panel.ctor` 全在 UI 线程（t1）。停靠/浮动/缩放由 Studio 原生接管；点面板 X 关闭、再从 `视图 → MD 备注` 重开，行为与原生面板一致（X 的实际点击由人工确认）。
 
 ### M1 句段跟随（约 0.5 天）
 - 订阅 `ActiveDocumentChanged` / `ActiveSegmentChanged`，读 `ActiveSegmentPair` + `GetCommentsFromSegment`

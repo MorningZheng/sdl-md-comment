@@ -30,6 +30,7 @@ namespace SdlMdComment
 
         public MdCommentPanel()
         {
+            Trace.Write("panel.ctor");
             Content = new StackPanel
             {
                 Margin = new Thickness(12),

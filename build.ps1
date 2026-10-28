@@ -86,10 +86,34 @@ New-Item -ItemType Directory -Force -Path $packages | Out-Null
 Copy-Item (Join-Path $out 'SdlMdComment.sdlplugin') $packages -Force
 Write-Host "package : $(Join-Path $packages 'SdlMdComment.sdlplugin')"
 
-# 清掉之前手工铺的 unpacked 目录，免得旧 dll 和包内容打架
-$stale = Join-Path $pluginsRoot 'Unpacked\SdlMdComment'
-if (Test-Path $stale) {
-    Remove-Item $stale -Recurse -Force
-    Write-Host "removed stale: $stale"
+# Studio 只在目录不存在时才从 Packages 重新解包，版本号变了也不一定会重来。
+# 所以直接把包里的部件铺到 Unpacked，保证加载的一定是刚编出来的这套。
+# DLL 被 Studio 占用时这里会失败——先关 Studio 再部署。
+$unpacked = Join-Path $pluginsRoot 'Unpacked\SdlMdComment'
+if (Test-Path $unpacked) {
+    try {
+        Remove-Item $unpacked -Recurse -Force
+    }
+    catch {
+        Write-Warning "删不掉 $unpacked —— Studio 还开着，关掉之后再跑一次"
+        exit 1
+    }
 }
+
+New-Item -ItemType Directory -Force -Path $unpacked | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $packages 'SdlMdComment.sdlplugin'))
+foreach ($entry in $zip.Entries) {
+    # OPC 的容器部件不是插件内容，跳过
+    if ($entry.FullName -match '^(_rels/|\[Content_Types\]|package/)') {
+        continue
+    }
+    $dest = Join-Path $unpacked $entry.FullName
+    New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+}
+$zip.Dispose()
+Write-Host "unpacked: $unpacked"
+
+
 
