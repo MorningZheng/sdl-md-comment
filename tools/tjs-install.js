@@ -281,7 +281,7 @@ async function getKnownHits() {
 	return map;
 }
 
-// ---------- 残留清扫：自动卸载"版本不对/落点不标准"的本插件副本 ----------
+// ---------- 残留清扫：自动查找并卸载本插件的所有旧副本（每次运行覆盖升级） ----------
 // 背景（2026-11-12 实战案例，另一台机器）：官方安装器按 PlugInName 建 Unpacked\悬浮批注，
 // 本安装器写的包被 Studio 解到 Unpacked\SdlMdComment —— 两份同 action id 的 plugin.xml
 // 并存 → Studio 启动 IActionService 重复键直接崩。所以安装前必须把本插件的所有落点
@@ -308,18 +308,7 @@ async function sanitizePlugin(t, pluginsRoot) {
 			if (!(await isOurPluginDir(dir))) continue;
 			let verdict = '';
 			if (e.name !== PLUGIN_ID) verdict = '非标准落点（重复注册风险）';
-			else {
-				// 标准落点：比对 manifest 版本区间与当前 Studio 大版本
-				try {
-					const xml = dec.decode(await tjs.readFile(dir + '/pluginpackage.manifest.xml'));
-					const m = xml.match(/<RequiredProduct name="([^"]*)" minversion="(\d+)\./);
-					if (m) {
-						const productOk = (t.n === '16' && m[1] === 'SDLTradosStudio') || (t.n !== '16' && m[1] === 'TradosStudio');
-						const majorOk = m[2] === t.n;
-						if (!productOk || !majorOk) verdict = `版本不对（包为 Studio ${m[2]}，宿主是 ${t.n}）`;
-					}
-				} catch { verdict = 'manifest 不可读'; }
-			}
+			else verdict = '覆盖升级（每次运行一律重装，不比版本）';
 			if (verdict) removals.push({ dir, verdict });
 		}
 	}
@@ -559,7 +548,7 @@ for (const { t, hit } of hits) {
 	const packagesDir = pluginsRoot + '/Packages';
 	const unpacked = pluginsRoot + '/Unpacked/' + PLUGIN_ID;
 
-	// 先清扫：卸掉版本不对的/落点不标准的副本与旧包（防 IActionService 重复键崩溃）
+	// 先清扫：查找本插件所有旧落点并清除（防 IActionService 重复键；覆盖升级语义，不比版本）
 	try {
 		await sanitizePlugin(t, pluginsRoot);
 	} catch (e) {
@@ -581,15 +570,8 @@ for (const { t, hit } of hits) {
 	const pkg = EMBEDDED[t.year];
 	if (!pkg) { console.log(`[跳过] Studio ${t.year} —— 内嵌数据里没有 ${t.year} 年份的包`); continue; }
 
-	// 清扫后重读：标准落点若版本正确会被保留（removals 不含它），否则为 null
+	// 覆盖升级语义：每次运行一律重装（清扫已把本插件所有落点清空），不比版本号
 	const cur = await installedVersion(unpacked);
-	if (!args.force && cur === pkg.version) {
-		// Unpacked 已是最新但 Packages 的包刚被清扫移除——补写回去保持一致
-		await ensureDir(packagesDir);
-		await guardedWrite(packagesDir + '/' + PLUGIN_ID + '.sdlplugin', b64decode(pkg.b64));
-		console.log(`[跳过] Studio ${t.year}（${hit.via}）已是 ${pkg.version}（包文件已补齐）`);
-		continue;
-	}
 
 	console.log(`[2/2] Studio ${t.year}（${hit.via}）: ${cur ?? '无'} -> ${pkg.version}，解码内嵌包 ${pkg.name}（${mb(pkg.b64.length)}）…`);
 	const bytes = b64decode(pkg.b64);
