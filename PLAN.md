@@ -410,3 +410,7 @@ System.ArgumentException: 已添加了具有相同键的项
 ### 一个测试本身的坑
 
 抓悬浮窗口时坐标一直对不上：`GetWindowRect` 在非 DPI 感知进程里返回的是**虚拟化后的逻辑坐标**，而 `CopyFromScreen` 按物理像素取图，两者差 1.5 倍。脚本里先调 `SetProcessDPIAware()` 才对齐。另外 `PrintWindow` 抓 WebView2 会拿到**过期的 GPU 层**（内容按旧宽度排版、右侧被切），判断布局是否正确要看子窗口实际尺寸（`Chrome_WidgetWin_0` 605×423 == 客户区 605×422 即为对齐）或直接屏幕截图。
+
+## 九、收官（2026-11-12）
+
+本机 Studio 2021(16.2.10) + 2022(17.0.0.11594) 双版本全线通过：安装器清扫→安装→校验→Studio 启动→按钮→悬浮窗跟随句段→Markdown 渲染，用户确认正常使用。最终交付：插件 0.7.3.0（dist\*-studio2021/2022.sdlplugin）+ 单文件安装器（dist\install-sdl-md-comment.exe，9.3MB 内嵌双包）。遗留：18/19 正式包待对应安装（流程已备：DLL 到位 → build.ps1 -StudioVersion N -Package → make-installer.ps1）。
