@@ -280,9 +280,11 @@ ui\index.html, app.js, app.css  渲染层
 
 **compile 单文件方案的真相 + 最终形态（2026-11-12 深夜攻关）**：之前"compile 有上游 bug"是误诊。真凶 = **火绒按调用链拦截新编译 exe 写 %AppData%**（五重实验实锤：D 盘任意写放行/Roaming 一律 EPERM；老 tjs.exe 放行/新 exe 拦截；spawn 的 cmd/PS/老 tjs 子进程全部继承拦截；拷贝的 cmd.exe 直接拒运行；Defender 服务未启用 + HipsTray 在跑）。同源码 run 态全通只是因为老 tjs.exe 是火绒认识的"老面孔"。唯一出路 = **用户把 exe 加入火绒信任区（一次性，仅自用可接受）**。已落地内嵌单文件方案：
 - `tools/gen-embed.js`：dist 出包后生成 base64 数据（`tools/packages.data.js`，gitignore）
-- `tools/tjs-install.js`：内嵌版——不依赖 dist，base64 解码后 writeFile 字节直写（绕开 compile 态 copyFile EPERM）；全流程进度输出（检测/解码/写入/字节数/写后校验/耗时）；**注册表 + 文件路径扫描双通道找 Trados**（编译态 reg 子进程同样被拦 exit 1——文件扫描是可靠通道：盘符 C~Z × SDL/Trados 品牌 × x86/x64 目录形状）；guardedWrite/guardedRemove 加白引导环（EPERM → 打印火绒信任区指引 → 按回车重试 ×3）
+- `tools/tjs-install.js`：内嵌版——不依赖 dist，base64 解码后 writeFile 字节直写（绕开 compile 态 copyFile EPERM）；全流程进度输出（检测/解码/写入/字节数/写后校验/耗时）；**五通道找 Trados（注册表/形状/已知路径/快捷方式/深度扫描）+ 两阶段先全量检测再逐个安装**；guardedWrite/guardedRemove 加白引导环（EPERM → 打印火绒信任区指引 → 按回车重试 ×3）
 - `tools/make-installer.ps1`：node 二进制拼接（**PS5.1 Get-Content 会把无 BOM UTF-8 按 GBK 读，中文损坏**——拼接严禁走 PowerShell 文本管道）+ `tjs compile` → `dist\install-sdl-md-comment.exe`（9.3MB 自包含）+ 冒烟
 - 分发更新节奏：`build.ps1 -Package`（出新包）→ `make-installer.ps1`（重嵌+重编+冒烟），两步出单文件
+
+**五通道检测定型（2026-11-12）**：①SDL 专属注册表键（编译态参数修正后**恢复命中**——"编译态 reg 被拦"实为 **spawn 参数形态差异**：run 态吞单个反斜杠需双写、compile 态原样传递单反斜杠才通，双反斜杠反而 exit 1；readReg 首次探测记忆 raw/bs 风格，双形态自适应）；②盘符×目录形状扫描；③Windows 已知路径：MuiCache（运行过 exe 的路径缓存，实测命中 Studio16）、UserAssist（ROT13 启动记录）、App Paths（键存在但无默认值）、Uninstall /f 全树搜索 InstallLocation、Recent 最近访问 lnk、任务栏/开始菜单固定 lnk、Win11 start2.bin（UTF-16 启发式）；④桌面/开始菜单快捷方式 lnk 启发式解析（269 个 lnk 实测双版本精确命中）；⑤有界深度扫描（限深 3，0.9s/1918 目录）。**tjs-lite-min 无 ffi**（typeof undefined，完整版 txiki.js 才有）；当前 reg.exe 子进程 + 参数自适应已实证够用，无需 FFI。
 
 **官方安装器"no versions installed"弹窗真相（2026-11-12 反射实证）**：双击 sdlplugin 弹 "There are no versions of Trados Studio Installed" 时，**不代表没检测到 Studio，而是"没有可安装的版本"**——安装器（Trados\Plugin installer\，v17.0.0.0，文件关联指向它）的逻辑：StudioVersionService.GetInstalledStudioVersions() 检测两代 Studio 都正常（反射调用实测返回 16.2.10 + 17.0.0.11594）；版本匹配 StudioVersionSuported(**min, max, installed**——参数顺序曾传错致全 False，勿再踩) 对两个包都返回 True；但 GetSelectableVersions 会用 IsPluginInstalledForVersion 把**已装着本插件**的版本剔除（本机 16 有 0.7.2 旧版、17 有 0.7.3 已部署），剔除后列表为空 → 弹误导文案。**对全新机器双击安装无影响**；升级场景需先卸旧版（删 Unpacked 目录 + Packages 包，或 Studio 插件管理器卸载）再双击。检测逻辑在 sdl.versioning.dll（16 系查 SDL 品牌、17 系查 Trados 品牌注册表键）。
 
