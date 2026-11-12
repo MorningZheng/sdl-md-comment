@@ -272,6 +272,8 @@ ui\index.html, app.js, app.css  渲染层
    - 2022/2024/2026(17+)：`%AppData%\Trados\Trados Studio\17\Plugins\Packages\`（AppData 根目录 17 起也换成了 Trados 品牌，版本号随 Studio 大版本）
 3. 重启 Studio，打开「附加功能 → 悬浮批注」。
 
+**分发选型（2026-11-12 定稿）**：只用 `.sdlplugin` 官方包。机制依据：①插件发现=纯目录扫描（Packages→启动自动解包 Unpacked，实测），无 COM/注册表/GAC，"注册"是伪需求；②官方安装器按 RequiredProduct 自动路由目标版本；③MSI 仅在企业 GPO/Intune 批量场景才有意义；④自制"扫描+拷贝"等于劣化版官方安装器，还最容易踩双包残留崩溃。若将来要"一键装任意版本"，加一个只做"检测版本→释放对应 sdlplugin→调官方安装器"的 Inno 选择器，不自己拷贝。
+
 **卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
 
 **卸载必须清干净（踩过）**：同一插件残留两份（例如 `Packages` 里两个不同文件名的包 → `Unpacked` 下两个目录）时，两份 plugin.xml 里有相同的 action id，Studio 启动阶段注册功能区就炸：
