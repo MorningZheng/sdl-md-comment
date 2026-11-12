@@ -4,4 +4,4 @@ dist/
 .scratch/
 ui/node_modules/
 ui/dist/
-*.user
+*.usertools/packages.data.js

@@ -1,27 +1,26 @@
-// 悬浮批注 一键安装器（tjs 版）—— 自动寻找已安装的 Trados Studio，安装对应版本的插件
+// 悬浮批注 一键安装器（tjs 内嵌版）—— 自动寻找已安装的 Trados Studio，安装对应版本的插件
 //
-// 编译为独立 exe 分发（用户无需装任何运行时）：
-//   tjs compile tools/tjs-install.js dist/install-sdl-md-comment.exe
-// 终端用户：把 exe 和 dist\*.sdlplugin 放同一目录，双击即可。
+// 包数据内嵌（globalThis.__PKGS__，由 tools/gen-embed.js 生成），单文件分发：
+//   node tools/gen-embed.js                      # dist 出新包后重跑
+//   详见 tools/make-installer.ps1                # 拼接 + tjs compile 出 dist\install-sdl-md-comment.exe
+// 终端用户：双击 exe 即可，无需任何运行时。
 //
-// 用法：install-sdl-md-comment.exe [--force] [--uninstall] [--dist <目录>] [--no-pause]
+// 用法：install-sdl-md-comment.exe [--force] [--uninstall] [--no-pause]
 //
-// 本构建 tjs 的三个实测约定（2026-11-12，tjs-lite-min v26.6.0）：
-//   1) 文件 API 只认正斜杠：stat('D:\\x') 报 ENOENT，'D:/x' 正常 —— 路径一律 '/'；
-//   2) spawn 会吞参数里的单个反斜杠（HKLM\A → HKLMA），双写 \\ 能保真且 reg 接受 ——
-//      注册表键一律经 bs() 双写；spawn 只认数组形式 spawn(['prog','arg'...], {stdio})；
-//   3) TextDecoder 不认 utf-16le —— plugin.xml 用手写 dec16 解码。
-//
-// 机制要点（前期全部实测）：
-//   - 插件无"注册"环节，Studio 纯目录扫描发现插件：Packages 里的 .sdlplugin 在启动时
-//     自动解包到 Unpacked（仅当 Unpacked 不存在）。安装 = 删旧 Unpacked + 拷包进 Packages。
-//   - 找 Trados：注册表 InstallLocation 反查 SDLTradosStudio.exe，失败退回默认目录。
-//   - 每个大版本一个包（产品名 17 起改名 + 程序集按版本抬号），包文件名里的年份即路由。
+// 机制要点（全部实测）：
+//   1) 插件无"注册"环节——Studio 纯目录扫描发现：Packages 里的 .sdlplugin 启动时自动解包
+//      到 Unpacked（仅当 Unpacked 不存在时）。安装 = 删旧 Unpacked + 写包进 Packages。
+//   2) 找 Trados：读注册表（InstallLocation 反查 SDLTradosStudio.exe），失败退回默认目录。
+//   3) 每个大版本一个包（产品名 17 起改名 + 程序集按版本抬号），内嵌表按年份路由。
+//   4) 这版 tjs（tjs-lite-min v26.6.0）实测约定：文件 API 只认正斜杠；spawn 只认数组形式
+//      且吞参数里的单个反斜杠（注册表键经 bs() 双写）；TextDecoder 不认 utf-16le；
+//      **compile 态 copyFile 覆盖已存在文件会 EPERM（run 态正常）——所以写包走 writeFile 字节流**。
 
 const tjs = globalThis.tjs;
 const dec = new TextDecoder();
 
 const PLUGIN_ID = 'SdlMdComment';
+const EMBEDDED = globalThis.__PKGS__ || {};
 
 // 双写反斜杠：spawn 传参会吞单个 \，双写后 reg.exe 收到归一化的单 \（实测通过）
 const bs = s => s.replace(/\\/g, '\\\\');
@@ -37,6 +36,25 @@ const TARGETS = [
 ];
 
 // ---------- 基础能力 ----------
+
+// base64 → Uint8Array（QuickJS 无 atob；包数据约 3.3MB/个，一次性解码可接受）
+function b64decode(s) {
+	const T = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+	const clean = s.replace(/[^A-Za-z0-9+/]/g, '');
+	const len = clean.length;
+	const pad = len % 4 === 0 ? 0 : 4 - (len % 4);
+	const bytes = new Uint8Array((len + pad) / 4 * 3 - pad);
+	let p = 0;
+	for (let i = 0; i < len; i += 4) {
+		const n = (T.indexOf(clean[i]) << 18) | (T.indexOf(clean[i + 1] ?? 'A') << 12)
+			| ((clean[i + 2] ? T.indexOf(clean[i + 2]) : 0) << 6)
+			| (clean[i + 3] ? T.indexOf(clean[i + 3]) : 0);
+		bytes[p++] = (n >> 16) & 0xFF;
+		if (i + 2 < len) bytes[p++] = (n >> 8) & 0xFF;
+		if (i + 3 < len) bytes[p++] = n & 0xFF;
+	}
+	return bytes;
+}
 
 async function runCapture(args) {
 	const p = tjs.spawn(args, { stdout: 'pipe', stderr: 'pipe' });
@@ -58,7 +76,6 @@ async function ensureDir(dir) {
 	let cur = parts[0];
 	for (let i = 1; i < parts.length; i++) {
 		cur += '/' + parts[i];
-		if (parts[i] === '' ) continue;
 		if (cur.length === 2 && cur[1] === ':') continue; // 盘符根
 		if (!(await exists(cur))) { try { await tjs.makeDir(cur); } catch { /* 已存在 */ } }
 	}
@@ -114,54 +131,68 @@ async function installedVersion(unpackedDir) {
 }
 
 function parseArgs(argv) {
-	const o = { force: false, uninstall: false, dist: null, noPause: false };
-	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
+	const o = { force: false, uninstall: false, noPause: false };
+	for (const a of argv) {
 		if (a === '--force') o.force = true;
 		else if (a === '--uninstall') o.uninstall = true;
 		else if (a === '--no-pause') o.noPause = true;
-		else if (a === '--dist') o.dist = argv[++i];
 	}
 	return o;
+}
+
+// ---------- 安全软件拦截引导 ----------
+// 实测（2026-11-12）：新编译 exe 及其全部子进程写 %AppData% 被火绒按调用链拦截（EPERM），
+// D 盘不受影响；把 exe 加入火绒信任区后即放行。无法程序化绕过（子进程继承拦截），
+// 所以只能引导用户加白后重试。
+
+let avName = '';
+async function detectAv() {
+	const { out } = await runCapture(['tasklist']);
+	if (/HipsTray/i.test(out)) avName = '火绒安全';
+}
+
+function printGuide() {
+	const who = avName || '安全软件';
+	console.error('');
+	console.error('[x] 写入被拦截（EPERM）—— 这是 ' + who + ' 在保护 AppData 目录，不是权限问题。');
+	console.error('    请将本程序加入 ' + who + ' 信任区（一次性）：');
+	console.error('      打开 ' + who + ' → 信任区 → 添加文件 → 选择本 exe → 保存');
+	console.error('    然后按回车重试……');
+}
+
+async function pauseRetry() {
+	try { await tjs.stdin.read(new Uint8Array(64)); } catch { /* 管道无输入 */ }
+}
+
+// 编译态写 AppData 会被安全软件拦（EPERM）→ 引导加白 → 按回车后重试（最多 3 轮）
+async function guardedWrite(path, bytes) {
+	for (let attempt = 0; ; attempt++) {
+		try { await tjs.writeFile(path, bytes); return; }
+		catch (e) {
+			if (!/EPERM/i.test(e.message) || attempt >= 2) throw e;
+			printGuide();
+			await pauseRetry();
+		}
+	}
+}
+
+async function guardedRemove(path) {
+	for (let attempt = 0; ; attempt++) {
+		try { await tjs.remove(path); return; }
+		catch (e) {
+			if (!/EPERM/i.test(e.message) || attempt >= 2) throw e;
+			printGuide();
+			await pauseRetry();
+		}
+	}
 }
 
 // ---------- 主流程 ----------
 
 const args = parseArgs(tjs.args);
-const dirname = p => p.replace(/[\\/][^\\/]+$/, '');
 
-// dist 定位：--dist > exe 同级（编译态；tjs run 时 exePath 是 tjs.exe，不命中）> 脚本同级 > 脚本上级 > 当前目录。
-// 多个候选目录可能都存在（别的项目的 dist），取第一个真的装着 sdlplugin 的；都没有则报错并列出试过的目录。
-const candidates = [];
-if (args.dist) candidates.push(fwd(args.dist));
-// 编译态：exe 和 *.sdlplugin 同目录分发 → exe 所在目录本身就是包目录；run 态 tjs.exe 目录无意义，两条都给，靠"含 sdlplugin"筛选
-const exeDir = fwd(dirname(tjs.exePath));
-candidates.push(exeDir);
-candidates.push(exeDir + '/dist');
-// 脚本定位：run 模式下 import.meta.url 指向脚本；编译态是裸文件名（无路径分隔符），跳过
-try {
-	const scriptUrl = import.meta.url.replace(/^file:\/\//, '');
-	if (/[/\\]/.test(scriptUrl) && /\.js$/i.test(scriptUrl)) {
-		const scriptDir = fwd(dirname(scriptUrl));
-		candidates.push(scriptDir + '/dist');
-		candidates.push(scriptDir + '/../dist');
-	}
-} catch { /* 无 import.meta 的环境忽略 */ }
-candidates.push(fwd(tjs.cwd) + '/dist');
-
-let distDir = null;
-const tried = [];
-for (const d of candidates) {
-	if (!(await exists(d))) { tried.push(d + '（不存在）'); continue; }
-	let has = false;
-	for await (const e of await tjs.readDir(d)) {
-		if (/\.sdlplugin$/i.test(e.name)) { has = true; break; }
-	}
-	if (has) { distDir = d; break; }
-	tried.push(d + '（无 .sdlplugin）');
-}
-if (!distDir) {
-	console.error('[x] 这些目录里都没找到 .sdlplugin：\n  ' + tried.join('\n  ') + '\n用 --dist 指定包目录。');
+if (!Object.keys(EMBEDDED).length) {
+	console.error('[x] 内嵌包数据缺失（__PKGS__ 未注入）——构建产物不完整。');
 	tjs.exit(1);
 }
 
@@ -169,18 +200,7 @@ if (await studioRunning()) {
 	console.error('[x] Trados Studio 正在运行，请先全部关闭再执行。');
 	tjs.exit(1);
 }
-
-// 找包：悬浮批注-0.7.3.0-studio2022.sdlplugin → 年份路由
-const packages = {};
-if (await exists(distDir)) {
-	for await (const e of await tjs.readDir(distDir)) {
-		const m = e.name.match(/-(\d+\.\d+\.\d+\.\d+)-studio(\d{4})\.sdlplugin$/);
-		if (m) packages[m[2]] = { name: e.name, path: distDir + '/' + e.name, version: m[1] };
-	}
-} else {
-	console.error('[x] 找不到包目录 ' + distDir + '，用 --dist 指定。');
-	tjs.exit(1);
-}
+await detectAv();
 
 let found = 0, done = 0;
 for (const t of TARGETS) {
@@ -194,14 +214,14 @@ for (const t of TARGETS) {
 	if (args.uninstall) {
 		await rmRf(unpacked);
 		const pkg = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
-		if (await exists(pkg)) await tjs.remove(pkg);
+		if (await exists(pkg)) await guardedRemove(pkg);
 		console.log(`卸载: Studio ${t.year}  (${exe})`);
 		done++;
 		continue;
 	}
 
-	const pkg = packages[t.year];
-	if (!pkg) { console.log(`跳过: Studio ${t.year} —— 没有 ${t.year} 年份的包`); continue; }
+	const pkg = EMBEDDED[t.year];
+	if (!pkg) { console.log(`跳过: Studio ${t.year} —— 内嵌数据里没有 ${t.year} 年份的包`); continue; }
 
 	const cur = await installedVersion(unpacked);
 	if (!args.force && cur === pkg.version) {
@@ -212,8 +232,16 @@ for (const t of TARGETS) {
 	// 清旧是硬要求：Unpacked 不清，Studio 不会重新解包；残留两份会崩启动
 	await rmRf(unpacked);
 	await ensureDir(packagesDir);
-	await tjs.copyFile(pkg.path, packagesDir + '/' + PLUGIN_ID + '.sdlplugin');
-	console.log(`安装: Studio ${t.year}  ${cur ?? '无'} -> ${pkg.version}  (${pkg.name})`);
+	// compile 态进程写 AppData 会被火绒拦（dbg4/dbg5 实锤，子进程也继承拦截），写包走 writeFile 字节流 + 加白引导
+	const bytes = b64decode(pkg.b64);
+	try {
+		await guardedWrite(packagesDir + '/' + PLUGIN_ID + '.sdlplugin', bytes);
+	} catch (e) {
+		console.error(`[x] 写入失败（Studio ${t.year}）: ${e.message}`);
+		console.error('    若上面没有出现加白指引，请检查磁盘空间/文件占用后重试。');
+		tjs.exit(1);
+	}
+	console.log(`安装: Studio ${t.year}  ${cur ?? '无'} -> ${pkg.version}  (内嵌 ${pkg.name})`);
 	done++;
 }
 
