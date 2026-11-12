@@ -274,6 +274,8 @@ ui\index.html, app.js, app.css  渲染层
 
 **分发选型（2026-11-12 定稿）**：只用 `.sdlplugin` 官方包。机制依据：①插件发现=纯目录扫描（Packages→启动自动解包 Unpacked，实测），无 COM/注册表/GAC，"注册"是伪需求；②官方安装器按 RequiredProduct 自动路由目标版本；③MSI 仅在企业 GPO/Intune 批量场景才有意义；④自制"扫描+拷贝"等于劣化版官方安装器，还最容易踩双包残留崩溃。若将来要"一键装任意版本"，加一个只做"检测版本→释放对应 sdlplugin→调官方安装器"的 Inno 选择器，不自己拷贝。
 
+**官方安装器"no versions installed"弹窗真相（2026-11-12 反射实证）**：双击 sdlplugin 弹 "There are no versions of Trados Studio Installed" 时，**不代表没检测到 Studio，而是"没有可安装的版本"**——安装器（Trados\Plugin installer\，v17.0.0.0，文件关联指向它）的逻辑：StudioVersionService.GetInstalledStudioVersions() 检测两代 Studio 都正常（反射调用实测返回 16.2.10 + 17.0.0.11594）；版本匹配 StudioVersionSuported(**min, max, installed**——参数顺序曾传错致全 False，勿再踩) 对两个包都返回 True；但 GetSelectableVersions 会用 IsPluginInstalledForVersion 把**已装着本插件**的版本剔除（本机 16 有 0.7.2 旧版、17 有 0.7.3 已部署），剔除后列表为空 → 弹误导文案。**对全新机器双击安装无影响**；升级场景需先卸旧版（删 Unpacked 目录 + Packages 包，或 Studio 插件管理器卸载）再双击。检测逻辑在 sdl.versioning.dll（16 系查 SDL 品牌、17 系查 Trados 品牌注册表键）。
+
 **卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
 
 **卸载必须清干净（踩过）**：同一插件残留两份（例如 `Packages` 里两个不同文件名的包 → `Unpacked` 下两个目录）时，两份 plugin.xml 里有相同的 action id，Studio 启动阶段注册功能区就炸：
