@@ -90,6 +90,9 @@ async function rmRf(path) {
 	const p = fwd(path);
 	let st;
 	try { st = await tjs.stat(p); } catch { return; }
+	// 链接防护：junction/symlink 只删链接本身，绝不递归进目标（踩过：顺着 Unpacked 里的
+	// ui\dist junction 把仓库前端产物删光）。readLink 能读出目标即为链接。
+	try { await tjs.readLink(p); await tjs.remove(p); return; } catch { /* 不是链接，走正常删除 */ }
 	if (!st.isDirectory) { await tjs.remove(p); return; }
 	for await (const entry of await tjs.readDir(p)) {
 		await rmRf(p + '/' + entry.name);
@@ -278,6 +281,66 @@ async function getKnownHits() {
 	return map;
 }
 
+// ---------- 残留清扫：自动卸载"版本不对/落点不标准"的本插件副本 ----------
+// 背景（2026-11-12 实战案例，另一台机器）：官方安装器按 PlugInName 建 Unpacked\悬浮批注，
+// 本安装器写的包被 Studio 解到 Unpacked\SdlMdComment —— 两份同 action id 的 plugin.xml
+// 并存 → Studio 启动 IActionService 重复键直接崩。所以安装前必须把本插件的所有落点
+// 清成"唯一标准位置"，版本不匹配的（比如 16 的包留在 17 上）也一并卸掉。
+
+// 判断一个 Unpacked 目录是否本插件：manifest 的 PlugInName 是"悬浮批注"，或存在 SdlMdComment.plugin.xml
+async function isOurPluginDir(dir) {
+	if (await exists(dir + '/' + PLUGIN_ID + '.plugin.xml')) return true;
+	try {
+		const m = dec.decode(await tjs.readFile(dir + '/pluginpackage.manifest.xml')).match(/<PlugInName>([^<]+)<\/PlugInName>/);
+		return !!m && m[1].includes('悬浮批注');
+	} catch { return false; }
+}
+
+async function sanitizePlugin(t, pluginsRoot) {
+	const unpackedRoot = pluginsRoot + '/Unpacked';
+	const packagesDir = pluginsRoot + '/Packages';
+	const removals = [];
+	// Unpacked：所有本插件落点
+	if (await exists(unpackedRoot)) {
+		for await (const e of await tjs.readDir(unpackedRoot)) {
+			if (!e.isDirectory) continue;
+			const dir = unpackedRoot + '/' + e.name;
+			if (!(await isOurPluginDir(dir))) continue;
+			let verdict = '';
+			if (e.name !== PLUGIN_ID) verdict = '非标准落点（重复注册风险）';
+			else {
+				// 标准落点：比对 manifest 版本区间与当前 Studio 大版本
+				try {
+					const xml = dec.decode(await tjs.readFile(dir + '/pluginpackage.manifest.xml'));
+					const m = xml.match(/<RequiredProduct name="([^"]*)" minversion="(\d+)\./);
+					if (m) {
+						const productOk = (t.n === '16' && m[1] === 'SDLTradosStudio') || (t.n !== '16' && m[1] === 'TradosStudio');
+						const majorOk = m[2] === t.n;
+						if (!productOk || !majorOk) verdict = `版本不对（包为 Studio ${m[2]}，宿主是 ${t.n}）`;
+					}
+				} catch { verdict = 'manifest 不可读'; }
+			}
+			if (verdict) removals.push({ dir, verdict });
+		}
+	}
+	// Packages：本插件的所有包文件（官方安装器保留发布名"悬浮批注-*"，我们写 SdlMdComment.sdlplugin）
+	const pkgFiles = [];
+	if (await exists(packagesDir)) {
+		for await (const e of await tjs.readDir(packagesDir)) {
+			if (/\.sdlplugin$/i.test(e.name) && (e.name.includes('悬浮批注') || e.name === PLUGIN_ID + '.sdlplugin')) pkgFiles.push(packagesDir + '/' + e.name);
+		}
+	}
+	for (const r of removals) {
+		console.log(`  [清扫] 卸载 ${r.dir.replace(/^.*Unpacked\//, 'Unpacked/')} —— ${r.verdict}`);
+		await guardedRmRf(r.dir);
+	}
+	for (const f of pkgFiles) {
+		console.log(`  [清扫] 移除旧包 ${f.replace(/^.*Packages\//, 'Packages/')}`);
+		await guardedRemove(f);
+	}
+	return removals.length + pkgFiles.length;
+}
+
 // ---------- 通道三/四：快捷方式扫描 + 有界深度扫描（结果按 StudioNN 缓存） ----------
 
 // plugin.xml 同款 UTF-16 手解，读 .lnk 里的 UTF-16 路径段
@@ -442,6 +505,18 @@ async function guardedRemove(path) {
 	}
 }
 
+// 目录级删除的引导环：EPERM 时引导加白后重试整个 rmRf（递归内部不逐个重试）
+async function guardedRmRf(path) {
+	for (let attempt = 0; ; attempt++) {
+		try { await rmRf(path); return; }
+		catch (e) {
+			if (!/EPERM/i.test(e.message) || attempt >= 2) throw e;
+			printGuide();
+			await pauseRetry();
+		}
+	}
+}
+
 // ---------- 主流程 ----------
 
 const args = parseArgs(tjs.args);
@@ -484,9 +559,18 @@ for (const { t, hit } of hits) {
 	const packagesDir = pluginsRoot + '/Packages';
 	const unpacked = pluginsRoot + '/Unpacked/' + PLUGIN_ID;
 
+	// 先清扫：卸掉版本不对的/落点不标准的副本与旧包（防 IActionService 重复键崩溃）
+	try {
+		await sanitizePlugin(t, pluginsRoot);
+	} catch (e) {
+		console.error(`[失败] Studio ${t.year} 清扫被拦（${e.message}）—— 该版本未处理，继续其余版本`);
+		failures.push(`Studio ${t.year}: 清扫失败 ${e.message}`);
+		continue;
+	}
+
 	if (args.uninstall) {
 		console.log(`[2/2] 卸载 Studio ${t.year}（${hit.via}）…`);
-		await rmRf(unpacked);
+		await guardedRmRf(unpacked);
 		const pkg = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
 		if (await exists(pkg)) await guardedRemove(pkg);
 		console.log(`      已移除 ${packagesDir}/${PLUGIN_ID}.sdlplugin 及 Unpacked`);
@@ -497,15 +581,19 @@ for (const { t, hit } of hits) {
 	const pkg = EMBEDDED[t.year];
 	if (!pkg) { console.log(`[跳过] Studio ${t.year} —— 内嵌数据里没有 ${t.year} 年份的包`); continue; }
 
+	// 清扫后重读：标准落点若版本正确会被保留（removals 不含它），否则为 null
 	const cur = await installedVersion(unpacked);
 	if (!args.force && cur === pkg.version) {
-		console.log(`[跳过] Studio ${t.year}（${hit.via}）已是 ${pkg.version}`);
+		// Unpacked 已是最新但 Packages 的包刚被清扫移除——补写回去保持一致
+		await ensureDir(packagesDir);
+		await guardedWrite(packagesDir + '/' + PLUGIN_ID + '.sdlplugin', b64decode(pkg.b64));
+		console.log(`[跳过] Studio ${t.year}（${hit.via}）已是 ${pkg.version}（包文件已补齐）`);
 		continue;
 	}
 
 	console.log(`[2/2] Studio ${t.year}（${hit.via}）: ${cur ?? '无'} -> ${pkg.version}，解码内嵌包 ${pkg.name}（${mb(pkg.b64.length)}）…`);
 	const bytes = b64decode(pkg.b64);
-	await rmRf(unpacked);                                   // 清旧是硬要求：不清则 Studio 不重新解包，残留两份会崩启动
+	await guardedRmRf(unpacked);                                   // 清旧是硬要求：不清则 Studio 不重新解包，残留两份会崩启动
 	await ensureDir(packagesDir);
 	const target = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
 	try {
