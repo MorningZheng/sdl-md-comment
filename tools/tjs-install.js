@@ -10,29 +10,34 @@
 // 机制要点（全部实测）：
 //   1) 插件无"注册"环节——Studio 纯目录扫描发现：Packages 里的 .sdlplugin 启动时自动解包
 //      到 Unpacked（仅当 Unpacked 不存在时）。安装 = 删旧 Unpacked + 写包进 Packages。
-//   2) 找 Trados：读注册表（InstallLocation 反查 SDLTradosStudio.exe），失败退回默认目录。
+//   2) 找 Trados 双通道：注册表（InstallLocation 反查 SDLTradosStudio.exe）优先，
+//      未命中则文件路径扫描（各盘符 × 已知安装目录形状）。
 //   3) 每个大版本一个包（产品名 17 起改名 + 程序集按版本抬号），内嵌表按年份路由。
 //   4) 这版 tjs（tjs-lite-min v26.6.0）实测约定：文件 API 只认正斜杠；spawn 只认数组形式
 //      且吞参数里的单个反斜杠（注册表键经 bs() 双写）；TextDecoder 不认 utf-16le；
-//      **compile 态 copyFile 覆盖已存在文件会 EPERM（run 态正常）——所以写包走 writeFile 字节流**。
+//      **compile 态进程写 %AppData% 会被火绒等按调用链拦截（EPERM，D 盘不受影响）——
+//      写包走 writeFile 字节流 + guardedWrite 加白引导**。
 
 const tjs = globalThis.tjs;
 const dec = new TextDecoder();
 
 const PLUGIN_ID = 'SdlMdComment';
 const EMBEDDED = globalThis.__PKGS__ || {};
+const T0 = Date.now();
 
 // 双写反斜杠：spawn 传参会吞单个 \，双写后 reg.exe 收到归一化的单 \（实测通过）
 const bs = s => s.replace(/\\/g, '\\\\');
 // tjs 文件 API 用正斜杠（反斜杠路径会 ENOENT）
 const fwd = s => s.replace(/\\/g, '/');
+const mb = n => (n / 1048576).toFixed(2) + ' MB';
+const secs = () => ((Date.now() - T0) / 1000).toFixed(1) + 's';
 
-// 年份 → 注册表键 / AppData 相对路径 / 默认安装目录兜底
+// 年份 → 注册表键 / AppData 相对路径 / 目录扫描形状（N = Studio 内部版本）
 const TARGETS = [
-	{ year: '2021', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\SDL\\Studio16',    fallback: 'C:\\Program Files (x86)\\SDL\\SDL Trados Studio\\Studio16',    appData: 'SDL/SDL Trados Studio/16' },
-	{ year: '2022', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\Trados\\Studio17', fallback: 'C:\\Program Files (x86)\\Trados\\Trados Studio\\Studio17',    appData: 'Trados/Trados Studio/17' },
-	{ year: '2024', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\Trados\\Studio18', fallback: 'C:\\Program Files (x86)\\Trados\\Trados Studio\\Studio18',    appData: 'Trados/Trados Studio/18' },
-	{ year: '2026', reg: 'HKLM\\SOFTWARE\\Trados\\Studio19',              fallback: 'C:\\Program Files\\Trados\\Trados Studio\\Studio19',          appData: 'Trados/Trados Studio/19' },
+	{ year: '2021', n: '16', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\SDL\\Studio16',    appData: 'SDL/SDL Trados Studio/16' },
+	{ year: '2022', n: '17', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\Trados\\Studio17', appData: 'Trados/Trados Studio/17' },
+	{ year: '2024', n: '18', reg: 'HKLM\\SOFTWARE\\WOW6432Node\\Trados\\Studio18', appData: 'Trados/Trados Studio/18' },
+	{ year: '2026', n: '19', reg: 'HKLM\\SOFTWARE\\Trados\\Studio19',              appData: 'Trados/Trados Studio/19' },
 ];
 
 // ---------- 基础能力 ----------
@@ -100,12 +105,48 @@ async function readReg(regKey, valueName) {
 	return line.split('REG_SZ')[1]?.trim() ?? null;
 }
 
-// ---------- 业务 ----------
+// ---------- 安装路径双通道检测 ----------
 
-async function detectStudio(t) {
-	const loc = (await readReg(t.reg, 'InstallLocation')) ?? t.fallback;
-	const exe = loc.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe';
-	return (await exists(exe)) ? exe : null;
+// 盘符探测：C~Z 逐个 stat 根目录
+async function drives() {
+	const out = [];
+	for (const L of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+		if (await exists(L + ':/')) out.push(L + ':');
+	}
+	return out;
+}
+
+async function detectStudio(t, driveList) {
+	// 通道一：注册表（覆盖自定义安装目录）
+	const reg = await readReg(t.reg, 'InstallLocation');
+	if (reg) {
+		const exe = reg.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe';
+		if (await exists(exe)) {
+			console.log(`  [检测] Studio ${t.year}: 注册表命中  ${exe}`);
+			return { exe, via: '注册表' };
+		}
+		console.log(`  [检测] Studio ${t.year}: 注册表有键但 exe 不在（${exe}），转文件扫描`);
+	} else {
+		console.log(`  [检测] Studio ${t.year}: 注册表未命中，转文件扫描`);
+	}
+	// 通道二：文件路径扫描（盘符 × 已知目录形状；16=SDL 品牌在 x86，17+ = Trados 品牌，19 在 64 位 Program Files）
+	const shapes = [
+		'/Program Files (x86)/SDL/SDL Trados Studio/Studio' + t.n,
+		'/Program Files (x86)/Trados/Trados Studio/Studio' + t.n,
+		'/Program Files/Trados/Trados Studio/Studio' + t.n,
+		'/Program Files/SDL/SDL Trados Studio/Studio' + t.n,
+	];
+	for (const drive of driveList) {
+		for (const shape of shapes) {
+			const dir = drive + shape;
+			if (await exists(dir + '/SDLTradosStudio.exe')) {
+				console.log(`  [检测] Studio ${t.year}: 文件扫描命中  ${dir}`);
+				return { exe: dir + '/SDLTradosStudio.exe', via: '文件扫描' };
+			}
+		}
+	}
+	console.log(`  [检测] Studio ${t.year}: 未安装`);
+	return null;
 }
 
 async function studioRunning() {
@@ -148,13 +189,13 @@ function parseArgs(argv) {
 let avName = '';
 async function detectAv() {
 	const { out } = await runCapture(['tasklist']);
-	if (/HipsTray/i.test(out)) avName = '火绒安全';
+	if (/HipsTray|usysdiag/i.test(out)) avName = '火绒安全';
 }
 
 function printGuide() {
 	const who = avName || '安全软件';
 	console.error('');
-	console.error('[x] 写入被拦截（EPERM）—— 这是 ' + who + ' 在保护 AppData 目录，不是权限问题。');
+	console.error('[!] 写入被拦截（EPERM）—— 这是 ' + who + ' 在保护 AppData 目录，不是权限问题。');
 	console.error('    请将本程序加入 ' + who + ' 信任区（一次性）：');
 	console.error('      打开 ' + who + ' → 信任区 → 添加文件 → 选择本 exe → 保存');
 	console.error('    然后按回车重试……');
@@ -190,8 +231,11 @@ async function guardedRemove(path) {
 // ---------- 主流程 ----------
 
 const args = parseArgs(tjs.args);
+const years = Object.keys(EMBEDDED).sort();
 
-if (!Object.keys(EMBEDDED).length) {
+console.log(`悬浮批注安装器  内嵌 ${years.length} 个包（${years.map(y => y + ' → v' + EMBEDDED[y].version).join('，')}）`);
+
+if (!years.length) {
 	console.error('[x] 内嵌包数据缺失（__PKGS__ 未注入）——构建产物不完整。');
 	tjs.exit(1);
 }
@@ -202,56 +246,66 @@ if (await studioRunning()) {
 }
 await detectAv();
 
+console.log(`[1/3] 检测已安装的 Trados Studio（注册表 + 文件路径扫描）…`);
+const driveList = await drives();
+console.log(`      盘符：${driveList.join(' ')}`);
+
 let found = 0, done = 0;
 for (const t of TARGETS) {
-	const exe = await detectStudio(t);
-	if (!exe) continue;
+	const hit = await detectStudio(t, driveList);
+	if (!hit) continue;
 	found++;
 	const pluginsRoot = fwd(tjs.env.APPDATA) + '/' + t.appData + '/Plugins';
 	const packagesDir = pluginsRoot + '/Packages';
 	const unpacked = pluginsRoot + '/Unpacked/' + PLUGIN_ID;
 
 	if (args.uninstall) {
+		console.log(`[3/3] 卸载 Studio ${t.year}（${hit.via}）…`);
 		await rmRf(unpacked);
 		const pkg = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
 		if (await exists(pkg)) await guardedRemove(pkg);
-		console.log(`卸载: Studio ${t.year}  (${exe})`);
+		console.log(`      已移除 ${packagesDir}/${PLUGIN_ID}.sdlplugin 及 Unpacked`);
 		done++;
 		continue;
 	}
 
 	const pkg = EMBEDDED[t.year];
-	if (!pkg) { console.log(`跳过: Studio ${t.year} —— 内嵌数据里没有 ${t.year} 年份的包`); continue; }
+	if (!pkg) { console.log(`[跳过] Studio ${t.year} —— 内嵌数据里没有 ${t.year} 年份的包`); continue; }
 
 	const cur = await installedVersion(unpacked);
 	if (!args.force && cur === pkg.version) {
-		console.log(`跳过: Studio ${t.year} 已是 ${pkg.version}`);
+		console.log(`[跳过] Studio ${t.year} 已是 ${pkg.version}`);
 		continue;
 	}
 
-	// 清旧是硬要求：Unpacked 不清，Studio 不会重新解包；残留两份会崩启动
-	await rmRf(unpacked);
-	await ensureDir(packagesDir);
-	// compile 态进程写 AppData 会被火绒拦（dbg4/dbg5 实锤，子进程也继承拦截），写包走 writeFile 字节流 + 加白引导
+	console.log(`[2/3] Studio ${t.year}: ${cur ?? '无'} -> ${pkg.version}，解码内嵌包 ${pkg.name}（${mb(pkg.b64.length)}）…`);
 	const bytes = b64decode(pkg.b64);
+	await rmRf(unpacked);                                   // 清旧是硬要求：不清则 Studio 不重新解包，残留两份会崩启动
+	await ensureDir(packagesDir);
+	const target = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
 	try {
-		await guardedWrite(packagesDir + '/' + PLUGIN_ID + '.sdlplugin', bytes);
+		await guardedWrite(target, bytes);
 	} catch (e) {
 		console.error(`[x] 写入失败（Studio ${t.year}）: ${e.message}`);
 		console.error('    若上面没有出现加白指引，请检查磁盘空间/文件占用后重试。');
 		tjs.exit(1);
 	}
-	console.log(`安装: Studio ${t.year}  ${cur ?? '无'} -> ${pkg.version}  (内嵌 ${pkg.name})`);
+	// 写后校验：字节数一致才算数
+	let ok = false;
+	try { ok = (await tjs.stat(fwd(target))).size === bytes.length; } catch {}
+	console.log(`[3/3] 写入 ${fwd(target)}`);
+	console.log(`      ${bytes.length} 字节，校验${ok ? '一致 ✓' : '不一致 ✗'}`);
+	if (!ok) tjs.exit(1);
 	done++;
 }
 
 if (!found) {
-	console.error('[x] 注册表和默认目录里都没找到已安装的 Trados Studio。');
+	console.error(`[x] ${secs()}：注册表和文件扫描都没找到已安装的 Trados Studio。`);
 	tjs.exit(1);
 }
 console.log(done > 0
-	? `完成（处理 ${done} 个版本）。重启 Trados Studio 后生效：附加功能 → 悬浮批注。`
-	: '所有已装 Studio 都已是最新，无需操作。');
+	? `[完成] 处理 ${done} 个版本，耗时 ${secs()}。重启 Trados Studio 后生效：附加功能 → 悬浮批注。`
+	: `[完成] 所有已装 Studio 都已是最新，无需操作（耗时 ${secs()}）。`);
 
 // 双击场景停一下让人看清结果
 if (!args.noPause) {
