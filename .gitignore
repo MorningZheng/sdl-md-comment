@@ -5,3 +5,4 @@ dist/
 ui/node_modules/
 ui/dist/
 *.usertools/packages.data.js
+build/
