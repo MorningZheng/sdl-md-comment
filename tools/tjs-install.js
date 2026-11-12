@@ -123,9 +123,9 @@ async function detectStudio(t, driveList) {
 		const exe = reg.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe';
 		if (await exists(exe)) {
 			console.log(`  [检测] Studio ${t.year}: 注册表命中  ${exe}`);
-			return { exe, via: '注册表' };
+			return { exe: fwd(exe), via: '注册表' };
 		}
-		console.log(`  [检测] Studio ${t.year}: 注册表有键但 exe 不在（${exe}），转文件扫描`);
+		console.log(`  [检测] Studio ${t.year}: 注册表有键但 exe 不在（${exe}），继续扫描`);
 	} else {
 		console.log(`  [检测] Studio ${t.year}: 注册表未命中，转文件扫描`);
 	}
@@ -145,22 +145,116 @@ async function detectStudio(t, driveList) {
 			}
 		}
 	}
+	// 通道三：快捷方式扫描（桌面/开始菜单的 .lnk 能暴露任意自定义安装目录）
+	const viaLnk = (await getShortcutHits()).get(t.n);
+	if (viaLnk) {
+		console.log(`  [检测] Studio ${t.year}: 快捷方式命中  ${viaLnk}`);
+		return { exe: viaLnk, via: '快捷方式' };
+	}
+	// 通道四：有界深度扫描（最后兜底；限深 3，跳过系统/大目录）
+	const viaDeep = (await getDeepHits(driveList)).get(t.n);
+	if (viaDeep) {
+		console.log(`  [检测] Studio ${t.year}: 深度扫描命中  ${viaDeep}`);
+		return { exe: viaDeep, via: '深度扫描' };
+	}
 	console.log(`  [检测] Studio ${t.year}: 未安装`);
 	return null;
 }
 
-async function studioRunning() {
-	const { out } = await runCapture(['tasklist', '/FI', 'IMAGENAME eq SDLTradosStudio.exe']);
-	return out.toLowerCase().includes('sdltradosstudio');
-}
+// ---------- 通道三/四：快捷方式扫描 + 有界深度扫描（结果按 StudioNN 缓存） ----------
 
-// plugin.xml 是 UTF-16LE；这版 TextDecoder 不认，手写解码
+// plugin.xml 同款 UTF-16 手解，读 .lnk 里的 UTF-16 路径段
 const dec16 = bytes => {
 	let start = bytes[0] === 0xFF && bytes[1] === 0xFE ? 2 : 0;
 	let s = '';
 	for (let i = start; i + 1 < bytes.length; i += 2) s += String.fromCharCode(bytes[i] | (bytes[i + 1] << 8));
 	return s;
 };
+
+// 从 .lnk 字节启发式提取指向 SDLTradosStudio.exe 的盘符路径（UTF-16 段 + ANSI 段各扫一遍）
+function extractExeFromLnk(bytes) {
+	const texts = [dec16(bytes), String.fromCharCode(...bytes.slice(0, 65536))];
+	const found = [];
+	for (const text of texts) {
+		if (!text) continue;
+		const re = /[A-Za-z]:\\[^<>|*?"\r\n]{0,220}?SDLTradosStudio\.exe/gi;
+		let m;
+		while ((m = re.exec(text)) !== null) found.push(m[0]);
+	}
+	return [...new Set(found)];
+}
+
+// 指向 exe 的路径 → '16'/'17'/… 版本号（父目录必须是 StudioNN，否则无法映射版本）
+function studioNOf(exePath) {
+	const m = exePath.match(/[/\\]Studio(\d{1,2})[/\\]SDLTradosStudio\.exe$/i);
+	return m ? m[1] : null;
+}
+
+let shortcutHitsCache = null;
+async function getShortcutHits() {
+	if (shortcutHitsCache) return shortcutHitsCache;
+	console.log('      快捷方式扫描（桌面/开始菜单）…');
+	const map = new Map();
+	const roots = [
+		fwd(tjs.env.USERPROFILE) + '/Desktop',
+		'C:/Users/Public/Desktop',
+		fwd(tjs.env.APPDATA) + '/Microsoft/Windows/Start Menu/Programs',
+		'C:/ProgramData/Microsoft/Windows/Start Menu/Programs',
+	];
+	const lnks = [];
+	async function walk(dir, depth) {
+		if (depth > 4) return;
+		let entries;
+		try { entries = await tjs.readDir(dir); } catch { return; }
+		for await (const e of entries) {
+			if (e.isDirectory) await walk(dir + '/' + e.name, depth + 1);
+			else if (/\.lnk$/i.test(e.name)) lnks.push(dir + '/' + e.name);
+		}
+	}
+	for (const r of roots) await walk(r, 1);
+	for (const lnk of lnks) {
+		try {
+			for (const c of extractExeFromLnk(await tjs.readFile(lnk))) {
+				const n = studioNOf(c);
+				if (n && !map.has(n) && await exists(c)) map.set(n, fwd(c));
+			}
+		} catch { /* 不可读的 lnk 忽略 */ }
+	}
+	shortcutHitsCache = map;
+	return map;
+}
+
+let deepHitsCache = null;
+async function getDeepHits(driveList) {
+	if (deepHitsCache) return deepHitsCache;
+	console.log('      深度扫描 ' + driveList.join(' ') + '（限深3，跳过系统/大目录）…');
+	const map = new Map();
+	// 跳过：系统目录 + 海量用户目录（后两者的标准安装位置已由形状扫描覆盖）
+	const SKIP = new Set(['Windows', 'Program Files', 'Program Files (x86)', 'ProgramData', 'Users', '$Recycle.Bin', 'System Volume Information', 'PerfLogs', 'Recovery', 'node_modules', '.git']);
+	async function walk(dir, depth) {
+		if (depth > 3) return;
+		let entries;
+		try { entries = await tjs.readDir(dir); } catch { return; }
+		for await (const e of entries) {
+			if (!e.isDirectory) continue;
+			if (SKIP.has(e.name) || e.name.startsWith('$') || e.name.startsWith('.')) continue;
+			const child = dir + '/' + e.name;
+			if (await exists(child + '/SDLTradosStudio.exe')) {
+				const n = studioNOf(child + '/SDLTradosStudio.exe');
+				if (n && !map.has(n)) map.set(n, child + '/SDLTradosStudio.exe');
+			}
+			await walk(child, depth + 1);
+		}
+	}
+	for (const drive of driveList) await walk(drive, 1);
+	deepHitsCache = map;
+	return map;
+}
+
+async function studioRunning() {
+	const { out } = await runCapture(['tasklist', '/FI', 'IMAGENAME eq SDLTradosStudio.exe']);
+	return out.toLowerCase().includes('sdltradosstudio');
+}
 
 async function installedVersion(unpackedDir) {
 	const xml = fwd(unpackedDir) + '/' + PLUGIN_ID + '.plugin.xml';
@@ -192,7 +286,10 @@ async function detectAv() {
 	if (/HipsTray|usysdiag/i.test(out)) avName = '火绒安全';
 }
 
+let guideShown = false;
 function printGuide() {
+	if (guideShown) return;
+	guideShown = true;
 	const who = avName || '安全软件';
 	console.error('');
 	console.error('[!] 写入被拦截（EPERM）—— 这是 ' + who + ' 在保护 AppData 目录，不是权限问题。');
@@ -246,21 +343,32 @@ if (await studioRunning()) {
 }
 await detectAv();
 
-console.log(`[1/3] 检测已安装的 Trados Studio（注册表 + 文件路径扫描）…`);
+console.log(`[1/2] 检测已安装的 Trados Studio（注册表 + 文件路径扫描）…`);
 const driveList = await drives();
 console.log(`      盘符：${driveList.join(' ')}`);
 
-let found = 0, done = 0;
+// 阶段一：全量检测——先扫完所有版本再动手，单个失败不影响其它版本的呈现
+const hits = [];
 for (const t of TARGETS) {
 	const hit = await detectStudio(t, driveList);
-	if (!hit) continue;
-	found++;
+	if (hit) hits.push({ t, hit });
+}
+
+if (!hits.length) {
+	console.error(`[x] ${secs()}：注册表和文件扫描都没找到已安装的 Trados Studio。`);
+	tjs.exit(1);
+}
+
+// 阶段二：逐个处理；单版本失败记录后继续，不让一个版本拖死全部
+const failures = [];
+let done = 0;
+for (const { t, hit } of hits) {
 	const pluginsRoot = fwd(tjs.env.APPDATA) + '/' + t.appData + '/Plugins';
 	const packagesDir = pluginsRoot + '/Packages';
 	const unpacked = pluginsRoot + '/Unpacked/' + PLUGIN_ID;
 
 	if (args.uninstall) {
-		console.log(`[3/3] 卸载 Studio ${t.year}（${hit.via}）…`);
+		console.log(`[2/2] 卸载 Studio ${t.year}（${hit.via}）…`);
 		await rmRf(unpacked);
 		const pkg = packagesDir + '/' + PLUGIN_ID + '.sdlplugin';
 		if (await exists(pkg)) await guardedRemove(pkg);
@@ -274,11 +382,11 @@ for (const t of TARGETS) {
 
 	const cur = await installedVersion(unpacked);
 	if (!args.force && cur === pkg.version) {
-		console.log(`[跳过] Studio ${t.year} 已是 ${pkg.version}`);
+		console.log(`[跳过] Studio ${t.year}（${hit.via}）已是 ${pkg.version}`);
 		continue;
 	}
 
-	console.log(`[2/3] Studio ${t.year}: ${cur ?? '无'} -> ${pkg.version}，解码内嵌包 ${pkg.name}（${mb(pkg.b64.length)}）…`);
+	console.log(`[2/2] Studio ${t.year}（${hit.via}）: ${cur ?? '无'} -> ${pkg.version}，解码内嵌包 ${pkg.name}（${mb(pkg.b64.length)}）…`);
 	const bytes = b64decode(pkg.b64);
 	await rmRf(unpacked);                                   // 清旧是硬要求：不清则 Studio 不重新解包，残留两份会崩启动
 	await ensureDir(packagesDir);
@@ -286,21 +394,22 @@ for (const t of TARGETS) {
 	try {
 		await guardedWrite(target, bytes);
 	} catch (e) {
-		console.error(`[x] 写入失败（Studio ${t.year}）: ${e.message}`);
-		console.error('    若上面没有出现加白指引，请检查磁盘空间/文件占用后重试。');
-		tjs.exit(1);
+		console.error(`[失败] Studio ${t.year}: ${e.message} —— 继续处理其余版本`);
+		failures.push(`Studio ${t.year}: ${e.message}`);
+		continue;
 	}
 	// 写后校验：字节数一致才算数
 	let ok = false;
 	try { ok = (await tjs.stat(fwd(target))).size === bytes.length; } catch {}
-	console.log(`[3/3] 写入 ${fwd(target)}`);
+	console.log(`      写入 ${fwd(target)}`);
 	console.log(`      ${bytes.length} 字节，校验${ok ? '一致 ✓' : '不一致 ✗'}`);
-	if (!ok) tjs.exit(1);
+	if (!ok) { failures.push(`Studio ${t.year}: 写后校验不一致`); continue; }
 	done++;
 }
 
-if (!found) {
-	console.error(`[x] ${secs()}：注册表和文件扫描都没找到已安装的 Trados Studio。`);
+if (failures.length) {
+	for (const f of failures) console.error('[x] ' + f);
+	if (!guideShown) console.error('    若未见加白指引，请检查磁盘空间/文件占用后重试。');
 	tjs.exit(1);
 }
 console.log(done > 0
