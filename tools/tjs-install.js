@@ -97,13 +97,40 @@ async function rmRf(path) {
 	await tjs.remove(p);
 }
 
+// ---------- 注册表读取（reg.exe 子进程，参数风格按宿主形态自动探测） ----------
+// 实测：run 态 spawn 吞单个反斜杠（需 bs 双写）；compile 态参数原样传递（单反斜杠才通，
+// 双反斜杠反而 exit 1）。首次探测记忆当前形态，之后全走记忆值。
+
+let regStyle = null; // 'raw' | 'bs'
+async function detectRegStyle() {
+	if (regStyle) return regStyle;
+	const key = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion';
+	for (const style of ['raw', 'bs']) {
+		const r = await runCapture(['reg', 'query', style === 'bs' ? bs(key) : key, '/v', 'ProgramFilesPath']);
+		if (r.code === 0) { regStyle = style; return style; }
+	}
+	regStyle = 'raw';
+	return regStyle;
+}
+
+async function regQuery(key, valueArgs) {
+	await detectRegStyle();
+	const keyArg = regStyle === 'bs' ? bs(key) : key;
+	return runCapture(['reg', 'query', keyArg, ...(valueArgs ?? [])]);
+}
+
 async function readReg(regKey, valueName) {
-	const { code, out } = await runCapture(['reg', 'query', bs(regKey), '/v', valueName]);
-	if (code !== 0) return null;
-	const line = out.split('\n').find(l => l.includes(valueName));
+	const r = await regQuery(regKey, ['/v', valueName]);
+	if (r.code !== 0) return null;
+	const line = r.out.split('\n').find(l => l.includes(valueName));
 	if (!line) return null;
 	return line.split('REG_SZ')[1]?.trim() ?? null;
 }
+
+const rot13 = s => s.replace(/[A-Za-z]/g, c => {
+	const base = c <= 'Z' ? 65 : 97;
+	return String.fromCharCode((c.charCodeAt(0) - base + 13) % 26 + base);
+});
 
 // ---------- 安装路径双通道检测 ----------
 
@@ -117,17 +144,17 @@ async function drives() {
 }
 
 async function detectStudio(t, driveList) {
-	// 通道一：注册表（覆盖自定义安装目录）
-	const reg = await readReg(t.reg, 'InstallLocation');
-	if (reg) {
-		const exe = reg.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe';
+	// 通道一：SDL 专属注册表键（覆盖自定义安装目录；编译态参数修正后实测可通）
+	const regLoc = await readReg(t.reg, 'InstallLocation');
+	if (regLoc) {
+		const exe = regLoc.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe';
 		if (await exists(exe)) {
 			console.log(`  [检测] Studio ${t.year}: 注册表命中  ${exe}`);
 			return { exe: fwd(exe), via: '注册表' };
 		}
 		console.log(`  [检测] Studio ${t.year}: 注册表有键但 exe 不在（${exe}），继续扫描`);
 	} else {
-		console.log(`  [检测] Studio ${t.year}: 注册表未命中，转文件扫描`);
+		console.log(`  [检测] Studio ${t.year}: 注册表未命中，继续扫描`);
 	}
 	// 通道二：文件路径扫描（盘符 × 已知目录形状；16=SDL 品牌在 x86，17+ = Trados 品牌，19 在 64 位 Program Files）
 	const shapes = [
@@ -145,13 +172,20 @@ async function detectStudio(t, driveList) {
 			}
 		}
 	}
-	// 通道三：快捷方式扫描（桌面/开始菜单的 .lnk 能暴露任意自定义安装目录）
+	// 通道三：Windows 已知路径（MuiCache/UserAssist/App Paths/Uninstall/最近访问/任务栏固定/start2.bin）
+	const known = await getKnownHits();
+	if (known.has(t.n)) {
+		const exe = known.get(t.n);
+		console.log(`  [检测] Studio ${t.year}: 已知路径命中  ${exe}`);
+		return { exe, via: '已知路径' };
+	}
+	// 通道四：快捷方式扫描（桌面/开始菜单的 .lnk 能暴露任意自定义安装目录）
 	const viaLnk = (await getShortcutHits()).get(t.n);
 	if (viaLnk) {
 		console.log(`  [检测] Studio ${t.year}: 快捷方式命中  ${viaLnk}`);
 		return { exe: viaLnk, via: '快捷方式' };
 	}
-	// 通道四：有界深度扫描（最后兜底；限深 3，跳过系统/大目录）
+	// 通道五：有界深度扫描（最后兜底；限深 3，跳过系统/大目录）
 	const viaDeep = (await getDeepHits(driveList)).get(t.n);
 	if (viaDeep) {
 		console.log(`  [检测] Studio ${t.year}: 深度扫描命中  ${viaDeep}`);
@@ -159,6 +193,89 @@ async function detectStudio(t, driveList) {
 	}
 	console.log(`  [检测] Studio ${t.year}: 未安装`);
 	return null;
+}
+
+// ---------- 通道三：Windows 已知路径（MuiCache/UserAssist/App Paths/Uninstall/Recent/固定项/start2.bin，结果缓存） ----------
+
+let knownHitsCache = null;
+async function getKnownHits() {
+	if (knownHitsCache) return knownHitsCache;
+	console.log('      已知路径扫描（MuiCache/UserAssist/App Paths/Uninstall/最近访问/任务栏固定）…');
+	const map = new Map();
+	const add = async (p) => {
+		if (!p) return false;
+		const n = studioNOf(p);
+		if (!n || map.has(n) || !(await exists(p))) return false;
+		map.set(n, fwd(p));
+		return true;
+	};
+	await detectRegStyle();
+	// MuiCache：系统记录的"运行过的 exe"友好名缓存，值名里就有完整路径
+	{
+		const r = await regQuery('HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache');
+		for (const line of r.out.split('\n')) {
+			const m = line.match(/^\s{2,}(.+?SDLTradosStudio\.exe)\./i);
+			if (m) await add(m[1]);
+		}
+	}
+	// UserAssist：资源管理器启动记录（值名 ROT13 编码）
+	{
+		const r = await regQuery('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F776EE77}\\Count');
+		for (const line of r.out.split('\n')) {
+			const m = rot13(line).match(/[A-Za-z]:\\[^<>|*?"\r\n]{0,220}?SDLTradosStudio\.exe/i);
+			if (m) await add(m[0]);
+		}
+	}
+	// App Paths（两个注册表视图）
+	for (const k of [
+		'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\SDLTradosStudio.exe',
+		'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\SDLTradosStudio.exe',
+	]) {
+		const r = await regQuery(k, ['/ve']);
+		const v = r.out.split('REG_SZ')[1]?.trim();
+		if (v && v !== '(value not set)') await add(v);
+	}
+	// Uninstall 卸载信息（/f 全树搜索后逐键取 InstallLocation）
+	for (const root of [
+		'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+		'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+	]) {
+		const r = await regQuery(root, ['/s', '/f', 'SDLTradosStudio', '/d']);
+		const heads = [...new Set(r.out.split('\n').map(l => l.trim()).filter(l => l.startsWith('HKEY_')))];
+		for (const h of heads) {
+			const d = await regQuery(h.replace(/^HKEY_LOCAL_MACHINE/, 'HKLM'), ['/v', 'InstallLocation']);
+			const v = d.out.split('REG_SZ')[1]?.trim();
+			if (v) await add(v.replace(/[\\/]+$/, '') + '\\SDLTradosStudio.exe');
+		}
+	}
+	// 最近访问 + 任务栏/开始菜单固定项的 .lnk
+	const lnkDirs = [
+		fwd(tjs.env.APPDATA) + '/Microsoft/Windows/Recent',
+		fwd(tjs.env.APPDATA) + '/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar',
+		fwd(tjs.env.APPDATA) + '/Microsoft/Internet Explorer/Quick Launch/User Pinned/StartMenu',
+	];
+	const lnks = [];
+	async function walk(dir, depth) {
+		if (depth > 2) return;
+		let entries;
+		try { entries = await tjs.readDir(dir); } catch { return; }
+		for await (const e of entries) {
+			if (e.isDirectory) await walk(dir + '/' + e.name, depth + 1);
+			else if (/\.lnk$/i.test(e.name)) lnks.push(dir + '/' + e.name);
+		}
+	}
+	for (const d of lnkDirs) await walk(d, 1);
+	for (const lnk of lnks) {
+		try { for (const c of extractExeFromLnk(await tjs.readFile(lnk))) await add(c); } catch { /* 忽略 */ }
+	}
+	// Win11 开始菜单数据库（start2.bin，UTF-16 路径启发式）
+	try {
+		const s2 = fwd(tjs.env.LOCALAPPDATA) + '/Packages/Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy/LocalState/start2.bin';
+		const m = dec16(await tjs.readFile(s2)).match(/[A-Za-z]:\\[^<>|*?"]{0,200}?SDLTradosStudio\.exe/gi);
+		if (m) for (const c of [...new Set(m)]) await add(c);
+	} catch { /* 无该文件忽略 */ }
+	knownHitsCache = map;
+	return map;
 }
 
 // ---------- 通道三/四：快捷方式扫描 + 有界深度扫描（结果按 StudioNN 缓存） ----------
