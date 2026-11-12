@@ -414,3 +414,18 @@ System.ArgumentException: 已添加了具有相同键的项
 ## 九、收官（2026-11-12）
 
 本机 Studio 2021(16.2.10) + 2022(17.0.0.11594) 双版本全线通过：安装器清扫→安装→校验→Studio 启动→按钮→悬浮窗跟随句段→Markdown 渲染，用户确认正常使用。最终交付：插件 0.7.3.0（dist\*-studio2021/2022.sdlplugin）+ 单文件安装器（dist\install-sdl-md-comment.exe，9.3MB 内嵌双包）。遗留：18/19 正式包待对应安装（流程已备：DLL 到位 → build.ps1 -StudioVersion N -Package → make-installer.ps1）。
+
+## 十、无源码覆盖 2024/2026（2026-11-12 下午，tools/patch-version.ps1）
+
+**取证链（不需要 18/19 安装）**：NuGet 官方 `Trados.Community.Toolkit.Integration` 的 AssemblyRef 直接实锤宿主程序集版本——**5.1.0 → 18.0.0.0、6.1.0 → 19.0.0.0**（IntegrationApi 家族 + ProjectAutomation.Core 全系跟大版本；token 恒 c28cdb26c445c888；PluginFramework 1.8 / FileTypeSupport 1.0 / Globalization 1.8 从不抬号）。Toolkit 6.1.0 本体 x64（19=64 位宿主再佐证）。Rws.StudioAssemblyResolver NuGet 包仅面向独立应用，插件场景不可用（插件类型加载期无早期代码执行点，AssemblyResolve 兜底死结）。
+
+**转换流水线（ildasm→ilasm 圆舞曲；CCI 1.66 API 与现代文档差异大弃用，16B 模式扫描被证不可靠弃用）**：
+1. 解包 studio2022 包 —— OPC 部件 [Content_Types]/_rels 必须保留带回，跳过会导致 Studio 解不开（踩过）
+2. ildasm → IL 文本；防御校验 `.ver 17:0:0:0` 恰好 4 处（恒定项 1.8/1.0 不匹配，无误伤面）
+3. 替换 17→18/19 → ilasm /dll /key=SdlMdComment.snk 重汇编（ilasm /key 直接重新强命名，sn -R 都省了）
+4. plugin.xml（UTF-16）改 6 处（4 个 Sdl.* 引用 + 2 个扩展点 attribute 程序集引用）；manifest 区间 N.0-N.9
+5. 重打包；中间产物 *.il/*.res/*.resources 排除（.resources 是 ildasm 拆出的资源散件，已重新嵌入）
+
+**验收（REA + ildasm + sn 三方）**：patch-2024 的 AssemblyRef 全 18.0.0.0、恒定项未动、strong-name-signed 有效；patch-2026 ildasm 反查 19:0:0:0 ×4；两包 15 条目与 2022 包完全同构。产物：dist\*-studio2024 / studio2026.sdlplugin（0.79MB，Optimal 压缩；官方打包器近乎不压故 2022 包 2.36MB，体积差无害）。安装器已重嵌 4 包（11.4MB）。
+
+**风险声明**：18/19 包为 IL 级转换产物，API 二进制兼容性依据官方 samples（master 已指 Studio19）与 Toolkit 引用矩阵推断，未经 18/19 真机验证——首测若弹"旧版 API"警告或按钮异常，回退：拿到真机 6 个 Sdl.*.dll 后 build.ps1 -StudioVersion 18/19 -Package 正规重编覆盖。
