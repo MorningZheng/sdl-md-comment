@@ -1,11 +1,13 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <PluginPackage xmlns="http://www.sdl.com/Plugins/PluginPackage/1.0">
   <PlugInName>悬浮批注</PlugInName>
-  <Version>0.7.2.0</Version>
+  <Version>0.7.3.0</Version>
   <Description>以 Markdown / HTML 渲染当前句段备注的悬浮窗口（只读）</Description>
   <Author>zheng</Author>
-  <!-- 16=2021 17=2022 18=2024 19=2026：一个包覆盖 2021 起的全部版本 -->
-  <RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="19.9" />
+  <!-- 产品名 17 起改名：16=SDLTradosStudio（2021），17/18/19=TradosStudio（2022/2024/2026）。
+       schema 只允许一个产品名，所以每个大版本一个包——本文件是 16 的默认值，
+       build.ps1 按 -StudioVersion 现场补丁这一行，构建完还原。 -->
+  <RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="16.9" />
   <Include>
     <!-- WebView2 托管层 -->
     <File>Microsoft.Web.WebView2.Core.dll</File>

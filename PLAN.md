@@ -214,13 +214,13 @@ win-x64\WebView2Loader.dll      64 位宿主（2026）
 ui\index.html, app.js, app.css  渲染层
 ```
 
-**版本支持**：manifest 声明 `<RequiredProduct name="SDLTradosStudio" minversion="16.0" maxversion="19.9"/>`，即 2021(16)/2022(17)/2024(18)/2026(19) 一个包覆盖。
+**版本支持**：按 Studio 大版本各出一个包——`RequiredProduct` schema 只允许一个产品名，且产品名 17 起改名（见下"0.7.3 修复"），"一个包通吃 16-19"不成立，官方也是按版本各发一包。
 
 | 版本 | 状态 |
 |---|---|
 | 2021 (16.2.10) | **已实测**：双击/放入 Packages → Studio 自行解包 → 按钮出现 → 开窗正常 → loader 从 `win-x86` 解析、前端从 `ui` 解析 |
-| 2022 / 2024 (17/18) | 未实测（本机无安装）。同代 net48 32 位宿主，理论一致 |
-| 2026 (19) | 未实测。64 位宿主，已备 `win-x64` loader；`Environment.Is64BitProcess` 选路 |
+| 2022 (17.0.0.1159) | **首测失败**（插件列表不显示）→ 根因已定位并修复（0.7.3，产品名），待复测 |
+| 2024 / 2026 (18/19) | 未实测。18 同 17 修法；19 64 位宿主已备 `win-x64` loader，`Environment.Is64BitProcess` 选路 |
 
 未实测的**真实风险**：我们编译时引用的 `Sdl.*` 程序集版本是 `16.0.0.0`。Studio 16 的 `SDLTradosStudio.exe.config` 里**没有**针对 `Sdl.Desktop.IntegrationApi` / `Sdl.TranslationStudioAutomation.IntegrationApi` 的 bindingRedirect（只有 `Sdl.ApiClientSdk.Core` 一条）。若 17/18/19 把这些程序集版本号抬高了，插件会加载失败——官方自己留三个分支分别编译，原因就在这里。
 
@@ -233,10 +233,35 @@ ui\index.html, app.js, app.css  渲染层
 
 拿到 17/18/19 的安装（或只把它们的 `Sdl.*.dll` 拷一份过来），各出一包即可，源码零改动。
 
+### 0.7.3 修复：2022（17）装不上——产品名在 17 改名了
+
+**现象**：17.0.0.1159 上双击 `.sdlplugin` 后，Studio 的插件列表里不显示。
+
+**根因（实锤）**：`RequiredProduct` 按产品名严格匹配，而 SDL→Trados 的内部产品名改名正好发生在 17：
+
+| 证据（官方仓库历史提交） | 版本 | RequiredProduct |
+|---|---|---|
+| DSI Viewer `434d8745`（v3.0.8.4） | 16.x | `name="SDLTradosStudio" minversion="16.0" maxversion="16.9"` |
+| DSI Viewer `cc62d0fd`（v4.0.0.2，2022 包） | 17.0 | `name="TradosStudio" minversion="17.0" maxversion="17.9"` |
+| DSI Viewer `291526aa`（v4.2.0.3） | 17.1+ | `name="TradosStudio" minversion="17.1.9" maxversion="17.9"` |
+| CommentViewPlugin `Studio_2024`/`Studio_2026` | 18/19 | `name="TradosStudio"` |
+
+我们 0.7.2 包里写的是 16 的老名字 `SDLTradosStudio` + 区间 16.0–19.9——17 的插件框架按名字对不上，扫描阶段直接过滤，症状就是"不出现"（连错误都不给）。
+
+**修复**：
+1. `build.ps1` 按 `-StudioVersion` 现场补丁 manifest（16→SDLTradosStudio 16.0-16.9；17/18/19→TradosStudio N.0-N.9），构建完还原源文件；源文件进 git 的默认值是 16。
+2. 17 首测用的**免编译测试包**：`dist\悬浮批注-0.7.3.0-studio2022-test.sdlplugin`（0.7.3 正式构建产物只改 manifest 产品名/区间重打包）。
+
+**17 复测的两种结果与后续**：
+- **正常出按钮、开窗可用** → 17 的 `Sdl.*` 程序集版本仍是 16.0.0.0，免重编译，17/18 大概率同法全过；
+- **列表出现但按钮报错/开窗失败** → 17 抬了程序集版本号，需要针对 17 重编译：把 `C:\Program Files (x86)\Trados\Trados Studio\Studio17\` 下这 6 个 DLL 拷过来，再跑 `.\build.ps1 -StudioVersion 17 -Package`：`Sdl.Core.PluginFramework.dll`、`Sdl.Desktop.IntegrationApi.dll`、`Sdl.Desktop.IntegrationApi.Extensions.dll`、`Sdl.FileTypeSupport.Framework.Core.dll`、`Sdl.ProjectAutomation.Core.dll`、`Sdl.TranslationStudioAutomation.IntegrationApi.dll`。
+
 **安装方式**（给用户）：
 1. 双击 `.sdlplugin` → 系统按文件关联调起 `Sdl.Community.SdlPluginInstaller.exe`（Studio 自带）；
-2. 或把它丢进 `%AppData%\SDL\SDL Trados Studio\<版本号>\Plugins\Packages\`，重启 Studio；
-3. 打开「附加功能 → 悬浮批注」。
+2. 或手工放入（绕过安装器）：
+   - 2021(16)：`%AppData%\SDL\SDL Trados Studio\16\Plugins\Packages\`
+   - 2022/2024/2026(17+)：`%AppData%\Trados\Trados Studio\17\Plugins\Packages\`（AppData 根目录 17 起也换成了 Trados 品牌，版本号随 Studio 大版本）
+3. 重启 Studio，打开「附加功能 → 悬浮批注」。
 
 **卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
 

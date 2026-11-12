@@ -74,6 +74,22 @@ if (-not (Test-Path (Join-Path $StudioRoot 'Sdl.Desktop.IntegrationApi.dll'))) {
 
 Write-Host "refs   : $StudioRoot"
 
+# RequiredProduct 的产品名在 17（Studio 2022）改过：16=SDLTradosStudio，17/18/19=TradosStudio。
+# 而且 manifest schema 只允许写一个产品名——"一个包通吃 16-19"不成立，官方也是按版本各出一包。
+# 所以构建时现场把 manifest 补丁成当前版本的产品名+区间，构建完还原（源文件保持 16 的默认值进 git）。
+$product = if ($StudioVersion -eq '16') { 'SDLTradosStudio' } else { 'TradosStudio' }
+$verMin = "${StudioVersion}.0"
+$verMax = "${StudioVersion}.9"
+$manifestPath = Join-Path $root 'src\SdlMdComment\pluginpackage.manifest.xml'
+$manifestBackup = [IO.File]::ReadAllText($manifestPath)
+$manifestPatched = $manifestBackup -replace
+    '<RequiredProduct name="[^"]*" minversion="[^"]*" maxversion="[^"]*" />',
+    "<RequiredProduct name=`"$product`" minversion=`"$verMin`" maxversion=`"$verMax`" />"
+[IO.File]::WriteAllText($manifestPath, $manifestPatched, (New-Object System.Text.UTF8Encoding($true)))
+Write-Host "product: $product $verMin-$verMax"
+
+try {
+
 # restore 走 dotnet 即可，跟插件打包 task 无关
 & dotnet restore $proj
 if ($LASTEXITCODE -ne 0) {
@@ -169,6 +185,12 @@ if (Test-Path (Join-Path $uiDist 'index.html')) {
 }
 else {
     Write-Warning "ui\dist 不存在，面板会报找不到前端产物；先在 ui 目录跑 npm run build"
+}
+
+}
+finally {
+    # 无论成败都还原 manifest（含 exit 0 的路径，finally 都会走）
+    [IO.File]::WriteAllText($manifestPath, $manifestBackup, (New-Object System.Text.UTF8Encoding($true)))
 }
 
 

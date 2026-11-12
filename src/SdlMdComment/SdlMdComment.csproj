@@ -9,7 +9,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SdlMdComment</AssemblyName>
     <RootNamespace>SdlMdComment</RootNamespace>
-    <Version>0.7.2</Version>
+    <Version>0.7.3</Version>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>SdlMdComment.snk</AssemblyOriginatorKeyFile>
