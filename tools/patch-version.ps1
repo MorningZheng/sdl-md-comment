@@ -5,7 +5,7 @@
   PluginFramework 1.8 / FileTypeSupport 1.0 恒定）。ildasm → 改 .ver → ilasm /key 重签。
 
   .\tools\patch-version.ps1              # 18 与 19 都出
-  前置：dist\悬浮批注-0.7.3.0-studio2022.sdlplugin 存在
+  前置：dist\$args 存在
 #>
 param()
 $ErrorActionPreference = 'Stop'
@@ -16,8 +16,16 @@ $sn = 'C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\
 $node = 'D:\Object\board\node-v26.11.1-win-x64\node.exe'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-$src = Join-Path $root 'dist\悬浮批注-0.7.3.0-studio2022.sdlplugin'
-if (-not (Test-Path $src)) { throw "源包不存在：$src" }
+# 自动取 dist 里版本号最大的 studio2022 包作为转换源
+$src = Get-ChildItem (Join-Path $root 'dist\*-studio2022.sdlplugin') |
+    Sort-Object { [version]($_.Name -replace '^悬浮批注-([\d.]+)-studio2022\.sdlplugin$', '$1') } |
+    Select-Object -Last 1
+if (-not $src) { throw 'dist 里没有 *-studio2022.sdlplugin' }
+$src = $src.FullName
+Write-Host "转换源: $src"
+
+# 版本号从源包文件名提取，出包名与之一致
+$ver = [regex]::Match($src, '-([\d.]+)-studio2022').Groups[1].Value
 
 # 参数：目标大版本 → 年份
 $targets = @(
@@ -71,7 +79,7 @@ foreach ($t in $targets) {
     [IO.File]::WriteAllText($m, $mt, (New-Object System.Text.UTF8Encoding($true)))
 
     # 8) 重打包（OPC 同构：[Content_Types] + _rels + 内容）
-    $out = Join-Path $root "dist\悬浮批注-0.7.3.0-studio$($t.year).sdlplugin"
+    $out = Join-Path $root "dist\悬浮批注-$ver-studio$($t.year).sdlplugin"
     if (Test-Path $out) { Remove-Item $out -Force }
     $zo = [System.IO.Compression.ZipFile]::Open($out, [System.IO.Compression.ZipArchiveMode]::Create)
     try {

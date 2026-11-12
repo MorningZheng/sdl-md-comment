@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PluginPackage xmlns="http://www.sdl.com/Plugins/PluginPackage/1.0">
   <PlugInName>悬浮批注</PlugInName>
-  <Version>0.7.3.0</Version>
+  <Version>0.7.4.0</Version>
   <Description>以 Markdown / HTML 渲染当前句段备注的悬浮窗口（只读）</Description>
   <Author>zheng</Author>
   <!-- 产品名 17 起改名：16=SDLTradosStudio（2021），17/18/19=TradosStudio（2022/2024/2026）。

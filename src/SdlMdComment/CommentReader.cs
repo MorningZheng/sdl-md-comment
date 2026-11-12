@@ -3,6 +3,7 @@ namespace SdlMdComment
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using Sdl.FileTypeSupport.Framework.BilingualApi;
     using Sdl.FileTypeSupport.Framework.NativeApi;
     using Sdl.TranslationStudioAutomation.IntegrationApi;
 
@@ -57,14 +58,22 @@ namespace SdlMdComment
             // SegmentId 是结构体，不能直接接在 ?. 后面
             snapshot.SegmentId = pair.Properties == null ? null : pair.Properties.Id.Id;
 
-            var comments = document.GetCommentsFromSegment(pair);
-            if (comments == null)
+            // 双通道收集：官方 GetCommentsFromSegment 覆盖段落属性级备注，但实测漏掉
+            // 锚在句中 markup 的局部备注（sdlxliff 里 target 文本中间的 mrk x-sdl-comment，
+            // 即 ICommentMarker）——所以再加一道对 source/target 的递归 markup 遍历。
+            var collected = new List<IComment>();
+            var official = document.GetCommentsFromSegment(pair);
+            if (official != null)
             {
-                return snapshot;
+                collected.AddRange(official.OfType<IComment>());
             }
 
+            CollectMarkerComments(pair.Source, collected);
+            CollectMarkerComments(pair.Target, collected);
+
+            // 同一线程可能被两条通道同时读到（author+date+text 去重），顺序保持首次出现
             var index = 1;
-            foreach (var comment in comments.OfType<IComment>())
+            foreach (var comment in Dedupe(collected))
             {
                 snapshot.Comments.Add(new CommentDto
                 {
@@ -78,6 +87,45 @@ namespace SdlMdComment
             }
 
             return snapshot;
+        }
+
+        /// <summary>递归收集容器里所有 ICommentMarker（句中局部备注）挂的备注线程。</summary>
+        private static void CollectMarkerComments(IAbstractMarkupDataContainer container, List<IComment> acc)
+        {
+            if (container == null)
+            {
+                return;
+            }
+
+            foreach (var item in container)
+            {
+                if (item is ICommentMarker marker)
+                {
+                    var thread = marker.Comments;
+                    if (thread != null)
+                    {
+                        acc.AddRange(thread.Comments.OfType<IComment>());
+                    }
+                }
+                else if (item is IAbstractMarkupDataContainer nested)
+                {
+                    // 标签对/其它容器内部还可能再有备注标记，递归下去
+                    CollectMarkerComments(nested, acc);
+                }
+            }
+        }
+
+        private static IEnumerable<IComment> Dedupe(List<IComment> comments)
+        {
+            var seen = new HashSet<string>();
+            foreach (var c in comments)
+            {
+                var key = c.Author + "|" + c.Date.Ticks + "|" + c.Text;
+                if (seen.Add(key))
+                {
+                    yield return c;
+                }
+            }
         }
 
         /// <summary>
