@@ -57,14 +57,18 @@ Write-Host "sdk    : $env:MSBuildSDKsPath"
 Write-Host "studio : $StudioVersion / $Configuration"
 
 # 引用程序集目录：没显式给就按版本猜。
-# 16（2021）在各版本里是唯一装在 Program Files (x86)\SDL 品牌目录下的，
-# 17/18/19 统一在 Program Files\Trados\Trados Studio\StudioN。
+# 16（2021）装在 Program Files (x86)\SDL 品牌目录；17（2022）/18（2024）仍是 32 位，
+# 装在 Program Files (x86)\Trados\Trados Studio\StudioN；19（2026）64 位，在 Program Files\Trados\...
 if (-not $StudioRoot) {
+    $studioDir = "Studio$StudioVersion"
     if ($StudioVersion -eq '16') {
-        $StudioRoot = 'C:\Program Files (x86)\SDL\SDL Trados Studio\Studio16'
+        $StudioRoot = "C:\Program Files (x86)\SDL\SDL Trados Studio\$studioDir"
+    }
+    elseif ($StudioVersion -eq '19') {
+        $StudioRoot = "C:\Program Files\Trados\Trados Studio\$studioDir"
     }
     else {
-        $StudioRoot = "C:\Program Files\Trados\Trados Studio\Studio$StudioVersion"
+        $StudioRoot = "C:\Program Files (x86)\Trados\Trados Studio\$studioDir"
     }
 }
 
@@ -116,9 +120,11 @@ if ($Package) {
     $dist = Join-Path $root 'dist'
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     $pkg = Join-Path $out 'SdlMdComment.sdlplugin'
-    # 包里没有文件版本信息，版本从插件程序集读
+    # 包里没有文件版本信息，版本从插件程序集读；同一版本会对每个 Studio 各编一次，
+    # 文件名必须带 Studio 年份区分，否则互相覆盖（16 包被 17 包顶掉踩过）。
     $version = [System.Reflection.AssemblyName]::GetAssemblyName((Join-Path $out 'SdlMdComment.dll')).Version.ToString()
-    $target = Join-Path $dist "悬浮批注-$version.sdlplugin"
+    $year = @{ '16' = '2021'; '17' = '2022'; '18' = '2024'; '19' = '2026' }[$StudioVersion]
+    $target = Join-Path $dist "悬浮批注-$version-studio$year.sdlplugin"
     Copy-Item $pkg $target -Force
     Write-Host "package: $target  ($([math]::Round((Get-Item $target).Length/1MB,2)) MB)"
 }

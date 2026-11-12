@@ -250,7 +250,16 @@ ui\index.html, app.js, app.css  渲染层
 
 **修复**：
 1. `build.ps1` 按 `-StudioVersion` 现场补丁 manifest（16→SDLTradosStudio 16.0-16.9；17/18/19→TradosStudio N.0-N.9），构建完还原源文件；源文件进 git 的默认值是 16。
-2. 17 首测用的**免编译测试包**：`dist\悬浮批注-0.7.3.0-studio2022-test.sdlplugin`（0.7.3 正式构建产物只改 manifest 产品名/区间重打包）。
+2. 免编译测试包（0.7.3 正式构建产物只改 manifest 产品名/区间重打包）：
+   - 2022(17.0.0.1159)：`dist\悬浮批注-0.7.3.0-studio2022-test.sdlplugin`（TradosStudio 17.0-17.9）
+   - 2024(18.1.4.6694)：`dist\悬浮批注-0.7.3.0-studio2024-test.sdlplugin`（TradosStudio 18.0-18.9）
+   - 双产品名实验包：`dist\悬浮批注-0.7.3.0-dualproduct-test.sdlplugin`（SDLTradosStudio 16.0-16.9 + TradosStudio 17.0-19.9 两个元素并存，赌框架容忍；测试前必须先清同 id 旧包）
+
+**18/19 是否同产品名坑（已核实）**：是。产品线没有 2023（2022 直接跳 2024），17/18/19 全部要求 `TradosStudio`（官方 17.0 指南原文 "Name should be set to: TradosStudio"；仓库 manifest 证据 17.0/17.1+/18.0/18.1/19.0 全一致）。我们的 N.0-N.9 宽区间是官方锁小版本口径的超集，兼容；17.2 指南的 bindingRedirect 只针对新 Terminology Provider API（本插件不用）。
+
+**第二层坑坐实（2026-11-12 本机 Studio17 实测）**：17（2022）把 IntegrationApi 家族 + ProjectAutomation.Core 抬到了 **17.0.0.0**（16 时代 16.0.0.0），PluginFramework 1.8.0.0 / FileTypeSupport.Framework.Core 1.0.0.0 不变；exe.config **没有**对 Sdl.* 的 bindingRedirect。18 的 API 警告框点名同样四个程序集（18 抬到 18.x）。结论：**跨大版本免编译行不通，每个大版本必须对着该版安装目录重编译**；"双 RequiredProduct 全家桶"实验随之作废（manifest 层就算容忍，二进制层也过不去）。
+
+**17 正式包已出**：本机装了 `C:\Program Files (x86)\Trados\Trados Studio\Studio17`（17.0.0.11594，32 位），`build.ps1 -StudioVersion 17 -Package -Deploy` 直接编译部署，plugin.xml 引用已是 17.0.0.0。**dist 命名规则改为 `-studio<年份>`**（同一程序集版本会为每个 Studio 各编一次，裸版本号会互相覆盖——16 包被 17 包顶掉踩过一次）。
 
 **17 复测的两种结果与后续**：
 - **正常出按钮、开窗可用** → 17 的 `Sdl.*` 程序集版本仍是 16.0.0.0，免重编译，17/18 大概率同法全过；
