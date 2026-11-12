@@ -274,6 +274,10 @@ ui\index.html, app.js, app.css  渲染层
 
 **分发选型（2026-11-12 定稿）**：只用 `.sdlplugin` 官方包。机制依据：①插件发现=纯目录扫描（Packages→启动自动解包 Unpacked，实测），无 COM/注册表/GAC，"注册"是伪需求；②官方安装器按 RequiredProduct 自动路由目标版本；③MSI 仅在企业 GPO/Intune 批量场景才有意义；④自制"扫描+拷贝"等于劣化版官方安装器，还最容易踩双包残留崩溃。若将来要"一键装任意版本"，加一个只做"检测版本→释放对应 sdlplugin→调官方安装器"的 Inno 选择器，不自己拷贝。
 
+**两个自研一键安装器（2026-11-12）**：
+- `install.ps1`（**主推**，Win10/11 零依赖）：注册表自动寻找 Trados（16=HKLM\WOW6432Node\SDL\Studio16，17/18=Trados 品牌 x86 键，19=Trados 64 位键），`InstallLocation` 反查 exe 二次确认，按年份选包、升级清残留、Studio 运行中拒绝执行、`-Force/-Uninstall` 可选。本机实测：2021 升 0.7.2→0.7.3、2022 同版本智能跳过。
+- `tools/tjs-install.js`（tjs 版，`tjs run tools/tjs-install.js` 运行）：同逻辑，run 模式实测三模式（常规跳过/`--force` 重装/`--uninstall`）全通过。**这版 tjs（tjs-lite-min v26.6.0）的实测坑**：①文件 API 只认正斜杠（反斜杠路径 ENOENT）；②spawn 只认数组形式且**吞参数里的单个反斜杠**——注册表键必须经 bs() 双写（reg 会归一化）；③TextDecoder 不认 utf-16le（手写解码）；④`tjs.cwd` 是字符串属性；⑤`import.meta.url` run 态指向脚本、编译态是裸文件名。**`tjs compile` 打包的独立 exe 在本机有确定性 bug**：部分构建的 exe 启动即 `Error: EPERM`（无任何 JS 输出，改名/换目录无效，同源码 run 模式完全正常）——上游引擎问题，不要用 lite-min 的 compile 分发，安装器一律走 install.ps1。
+
 **官方安装器"no versions installed"弹窗真相（2026-11-12 反射实证）**：双击 sdlplugin 弹 "There are no versions of Trados Studio Installed" 时，**不代表没检测到 Studio，而是"没有可安装的版本"**——安装器（Trados\Plugin installer\，v17.0.0.0，文件关联指向它）的逻辑：StudioVersionService.GetInstalledStudioVersions() 检测两代 Studio 都正常（反射调用实测返回 16.2.10 + 17.0.0.11594）；版本匹配 StudioVersionSuported(**min, max, installed**——参数顺序曾传错致全 False，勿再踩) 对两个包都返回 True；但 GetSelectableVersions 会用 IsPluginInstalledForVersion 把**已装着本插件**的版本剔除（本机 16 有 0.7.2 旧版、17 有 0.7.3 已部署），剔除后列表为空 → 弹误导文案。**对全新机器双击安装无影响**；升级场景需先卸旧版（删 Unpacked 目录 + Packages 包，或 Studio 插件管理器卸载）再双击。检测逻辑在 sdl.versioning.dll（16 系查 SDL 品牌、17 系查 Trados 品牌注册表键）。
 
 **卸载**：从 `Packages` 删掉包、删掉 `Unpacked\<包名>` 目录，或在「附加功能 → 插件」里取消勾选。
